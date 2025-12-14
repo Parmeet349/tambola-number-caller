@@ -1,98 +1,60 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+// app/(tabs)/index.tsx
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import React from 'react';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import AboutScreen from '../../components/screens/AboutScreen';
+import GameScreen from '../../components/screens/GameScreen';
+import HistoryModalImported from '../../components/screens/HistoryModal';
+import HomeScreen from '../../components/screens/HomeScreen';
 
-export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+import { Text, View } from 'react-native';
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+
+export type RootStackParamList = {
+  Home: undefined;
+  Game: { initialMode: 'manual' | 'auto'; initialSpeed: 'slow' | 'medium' | 'fast'; initialMute?: boolean };
+  HistoryModal: { historySnapshot: number[] };
+  About: undefined;
+  Privacy: undefined;
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+// Helper: if import failed and value is falsy, return a placeholder component
+function ensureComponent<T extends React.ComponentType<any> | undefined>(Comp: T, name: string): React.ComponentType<any> {
+  if (Comp && typeof Comp === 'function') return Comp as React.ComponentType<any>;
+  // fallback placeholder
+  console.warn(`[Navigator] Screen component "${name}" is missing or not a valid component. Rendering placeholder.`);
+  const Placeholder: React.FC = () => (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <Text style={{ fontWeight: '700', marginBottom: 8 }}>{name} is not available</Text>
+      <Text>Please check the import path and ensure the screen exports a default React component.</Text>
+    </View>
   );
+  return Placeholder;
 }
 
-const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
-});
+const HistoryModal = ensureComponent(HistoryModalImported as any, 'HistoryModal');
+const Home = ensureComponent(HomeScreen as any, 'HomeScreen');
+const Game = ensureComponent(GameScreen as any, 'GameScreen');
+const About = ensureComponent(AboutScreen as any, 'AboutScreen');
+const Privacy = ensureComponent(AboutScreen as any, 'PrivacyScreen');
+
+// import { AdStateProvider } from '../../utils/store/adState';
+
+
+export default function TabsIndex() {
+  return (
+    // <AdStateProvider>
+    <Stack.Navigator initialRouteName="Home">
+      <Stack.Screen name="Home" component={Home} options={{ title: 'Tambola — Home', headerShown: false }} />
+      <Stack.Screen name="Game" component={Game} options={{ title: 'Tambola — Game', headerBackTitle: 'Back' }} />
+      <Stack.Screen name="About" component={About} options={{ title: 'Tambola — Game', headerBackTitle: 'Back' }} />
+      <Stack.Screen name="Privacy" component={Privacy} options={{ title: 'Privacy Policy', headerBackTitle: 'Back' }} />
+      <Stack.Group screenOptions={{ presentation: 'modal' }}>
+        <Stack.Screen name="HistoryModal" component={HistoryModal} options={{ title: 'Called Numbers' }} />
+      </Stack.Group>
+    </Stack.Navigator>
+    // </AdStateProvider>
+  );
+}
