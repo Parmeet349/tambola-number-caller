@@ -2,9 +2,11 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, Text, TouchableOpacity } from 'react-native';
 import { useRewardedAd } from '../utils/hooks/useRewardedAd';
+import { useTheme } from '../utils/store/themeState';
 
 export default function RewardedButton() {
   const { loaded, show, loading: adLoading } = useRewardedAd();
+  const { currentTheme } = useTheme();
   const [processing, setProcessing] = useState(false);
 
   async function onWatch() {
@@ -26,7 +28,7 @@ export default function RewardedButton() {
 
   const label = (() => {
     if (processing || adLoading) return 'Loading Ad...';
-    if (loaded) return 'Watch Ad and go 30 minutes Ad-Free';
+    if (loaded) return '🎬 Watch Ad → 30 min Ad-Free';
     return 'Ad not ready';
   })();
 
@@ -35,17 +37,20 @@ export default function RewardedButton() {
       onPress={onWatch}
       disabled={disabled}
       style={{
-        backgroundColor: disabled ? '#ddd' : '#1e88e5',
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 8,
+        backgroundColor: disabled
+          ? (currentTheme.isDark ? '#1b1433' : '#e0e0e0')
+          : currentTheme.primary,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 12,
         alignItems: 'center',
+        opacity: disabled ? 0.6 : 1,
       }}
     >
       {processing || adLoading ? (
-        <ActivityIndicator />
+        <ActivityIndicator color="#fff" />
       ) : (
-        <Text style={{ fontWeight: '700', color:'white' }}>{label}</Text>
+        <Text style={{ fontWeight: '800', color: '#fff', fontSize: 14 }}>{label}</Text>
       )}
     </TouchableOpacity>
   );

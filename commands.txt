@@ -1,0 +1,65 @@
+# Clean up .DS_Store files
+dot_clean .
+
+# Clean . and "._" files
+find . -name "._*" -delete
+
+# Prebuild the app
+npx expo prebuild --clean
+
+# Remove old files
+rm -rf ios/
+rm -rf android/
+rm -rf node_modules/
+rm -rf package-lock.json
+
+# Install dependencies
+npm install
+
+# Update Pod file
+project 'TambolaNumberCallerHousie.xcodeproj'
+
+# Remove old pods
+rm -rf Pods Podfile.lock
+rm -rf ios/Podfile.lock
+rm -rf ~/Library/Developer/Xcode/DerivedData
+
+# Check for issues
+npx expo-doctor
+
+# Install pods
+pod install --repo-update
+
+# Build the app (development)
+eas build --platform ios --profile development
+eas build --platform android --profile development
+
+# Build the app (preview)
+eas build --platform ios --profile preview
+eas build --platform android --profile preview
+
+# Build the app (production)
+eas build --platform ios --profile production
+eas build --platform android --profile production
+
+# Clear cache
+eas build -p ios --clear-cache
+
+# Submit to App Store
+eas submit --platform ios
+eas submit --platform android
+
+# Run dev client
+npx expo start --dev-client
+
+# Run ios build
+npx expo run:ios
+# Run android build
+npx expo run:android
+
+
+# Execute the reset script for automation of build
+./reset.sh
+
+# Get IP address
+ipconfig getifaddr en0

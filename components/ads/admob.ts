@@ -1,4 +1,5 @@
 // components/ads/admob.ts
+import { Platform } from 'react-native';
 import mobileAds, { MaxAdContentRating, TestIds } from 'react-native-google-mobile-ads';
 
 // init function - call once on app start (App.tsx or index)
@@ -21,17 +22,22 @@ export const TEST_IDS = {
   APP_OPEN: TestIds.APP_OPEN,
 };
 
-// export const PROD_IDS = {
-//   BANNER: 'ca-app-pub-1373723692607134/9597257218',
-//   INTERSTITIAL: 'ca-app-pub-1373723692607134/4580734256',
-//   REWARDED: 'ca-app-pub-1373723692607134/9020217302',
-//   APP_OPEN: 'ca-app-pub-1373723692607134/5702165651', // your real app open unit
-// };
 
 export const PROD_IDS = {
-  BANNER: process.env.BANNER,
-  INTERSTITIAL: process.env.INTERSTITIAL,
-  REWARDED: process.env.REWARDED,
-  APP_OPEN: process.env.APP_OPEN,
+  BANNER: Platform.select({
+    ios: 'ca-app-pub-1373723692607134/1178550334',
+    android: 'ca-app-pub-1373723692607134/9597257218',
+  }),
+  APP_OPEN: Platform.select({
+    ios: 'ca-app-pub-1373723692607134/8969410448',
+    android: 'ca-app-pub-1373723692607134/5702165651',
+  }),
+  INTERSTITIAL: Platform.select({
+    ios: 'ca-app-pub-1373723692607134/5030165439',
+    android: 'ca-app-pub-1373723692607134/4580734256',
+  }),
+  REWARDED: Platform.select({
+    ios: 'ca-app-pub-1373723692607134/2404002096',
+    android: 'ca-app-pub-1373723692607134/9020217302',
+  }),
 };
-

@@ -2,19 +2,29 @@
   "expo": {
     "name": "Tambola Number Caller (Housie)",
     "slug": "tambola-number-caller",
-    "version": "1.5.2",
+    "version": "1.5.7",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/logo.png",
     "scheme": "tambolanumbercaller",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.geekypajis.tambolanumbers"
+      "bundleIdentifier": "com.geekypajis.tambolanumbers",
+      "buildNumber": "10",
+      "infoPlist": {
+        "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads and improve the app experience.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "icon": "./assets/images/logo.png",
+      "config": {
+        "googleMobileAdsAppId": "ca-app-pub-1373723692607134~5045643159"
+      },
+      "appleTeamId": "V8734DA44D",
+      "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
-      "androidAppId": "com.geekypajis.tambolanumbers",
-      "versionCode": 7,
+      "versionCode": 10,
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/logo.png"
@@ -24,7 +34,11 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.geekypajis.tambolanumbers"
+      "package": "com.geekypajis.tambolanumbers",
+      "permissions": [
+        "com.google.android.gms.permission.AD_ID"
+      ],
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
@@ -48,7 +62,32 @@
         "react-native-google-mobile-ads",
         {
           "androidAppId": "ca-app-pub-1373723692607134~4420249362",
-          "iosAppId": "ca-app-pub-1373723692607134~4420249362"
+          "iosAppId": "ca-app-pub-1373723692607134~5045643159"
+        }
+      ],
+      "expo-tracking-transparency",
+      [
+        "@react-native-firebase/app",
+        {
+          "ios": {
+            "googleServicesFile": "./GoogleService-Info.plist"
+          },
+          "android": {
+            "googleServicesFile": "./google-services.json"
+          }
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "extraPods": [
+              {
+                "name": "GoogleUtilities",
+                "modular_headers": true
+              }
+            ]
+          }
         }
       ]
     ],

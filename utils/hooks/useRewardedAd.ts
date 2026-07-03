@@ -1,98 +1,123 @@
-// src/utils/hooks/useRewardedAd.ts (or wherever you keep it)
-import { useEffect, useRef, useState } from 'react';
+// src/utils/hooks/useRewardedAd.ts
+import { useEffect, useState } from 'react';
 import {
   AdEventType,
   RewardedAdEventType,
   RewardedInterstitialAd,
 } from 'react-native-google-mobile-ads';
-// import { TEST_IDS, PROD_IDS } from '../../components/ads/admob';
 import { PROD_IDS } from '../../components/ads/admob';
 import { useAdState } from '../store/adState';
 
-// export function useRewardedAd(unitId = TEST_IDS.REWARDED) {
+// Global Singleton State
+let rewardedAd: RewardedInterstitialAd | null = null;
+let isLoaded = false;
+let isLoading = false;
+const listeners = new Set<(loaded: boolean, loading: boolean) => void>();
+
+function notifyListeners() {
+  listeners.forEach((l) => l(isLoaded, isLoading));
+}
+
+function setupAd(unitId: string) {
+  if (rewardedAd) return;
+
+  rewardedAd = RewardedInterstitialAd.createForAdRequest(unitId, {
+    requestNonPersonalizedAdsOnly: true,
+  });
+
+  rewardedAd.addAdEventListener(RewardedAdEventType.LOADED, () => {
+    console.log('[Rewarded Singleton] LOADED');
+    isLoaded = true;
+    isLoading = false;
+    notifyListeners();
+  });
+
+  rewardedAd.addAdEventListener(AdEventType.ERROR, (err) => {
+    console.warn('[Rewarded Singleton] ERROR', err);
+    isLoaded = false;
+    isLoading = false;
+    notifyListeners();
+  });
+
+  rewardedAd.addAdEventListener(AdEventType.CLOSED, () => {
+    console.log('[Rewarded Singleton] CLOSED – reloading');
+    isLoaded = false;
+    notifyListeners();
+    loadAd();
+  });
+}
+
+function loadAd() {
+  if (!rewardedAd) return;
+  if (isLoaded || isLoading) return;
+
+  try {
+    console.log('[Rewarded Singleton] Calling load()');
+    isLoading = true;
+    notifyListeners();
+    rewardedAd.load();
+  } catch (e) {
+    console.warn('[Rewarded Singleton] load() threw', e);
+    isLoading = false;
+    notifyListeners();
+  }
+}
+
 export function useRewardedAd(unitId = PROD_IDS.REWARDED) {
-  const rewardedRef = useRef(
-    RewardedInterstitialAd.createForAdRequest(unitId, {
-      requestNonPersonalizedAdsOnly: true,
-    })
-  );
-  const [loaded, setLoaded] = useState(false);
-  const [loading, setLoading] = useState(false);
   const { setAdFreeForHours } = useAdState();
 
+  // 1. Setup global instance if needed
+  if (!rewardedAd) {
+    setupAd(unitId);
+  }
+
+  // 2. Local state
+  const [loaded, setLoaded] = useState(isLoaded);
+  const [loading, setLoading] = useState(isLoading);
+
+  // 3. Subscribe to global state
   useEffect(() => {
-    const rewarded = rewardedRef.current;
-    if (!rewarded) return;
+    const handler = (l: boolean, lng: boolean) => {
+      setLoaded(l);
+      setLoading(lng);
+    };
+    listeners.add(handler);
 
-    const unsubLoad = rewarded.addAdEventListener(
-      RewardedAdEventType.LOADED,
-      () => {
-        console.log('[Rewarded] LOADED');
-        setLoaded(true);
-        setLoading(false); // ✅ stop loading
-      }
-    );
+    // Initial load check
+    loadAd();
 
-    const unsubError = rewarded.addAdEventListener(
-      AdEventType.ERROR,
-      (err) => {
-        console.warn('[Rewarded] ERROR', err);
-        setLoaded(false);
-        setLoading(false); // ✅ stop loading
-      }
-    );
+    return () => {
+      listeners.delete(handler);
+    };
+  }, [unitId]);
 
-    const unsubEarned = rewarded.addAdEventListener(
+  // 4. Handle Reward Earned (Specific to this component/context usage)
+  useEffect(() => {
+    if (!rewardedAd) return;
+    const unsubEarned = rewardedAd.addAdEventListener(
       RewardedAdEventType.EARNED_REWARD,
       (reward) => {
         console.log('[Rewarded] EARNED_REWARD', reward);
         setAdFreeForHours(0.5); // 0.5 hours = 30 minutes
       }
     );
-
-    const unsubClosed = rewarded.addAdEventListener(
-      AdEventType.CLOSED,
-      () => {
-        console.log('[Rewarded] CLOSED – reloading');
-        setLoaded(false);
-        setLoading(true);  // ✅ we’re loading a new ad
-        rewarded.load();
-      }
-    );
-
-    setLoading(true);
-    try {
-      console.log('[Rewarded] Calling load()');
-      rewarded.load();
-    } catch (e) {
-      console.warn('[Rewarded] load() threw', e);
-      setLoading(false);
-    }
-
     return () => {
-      console.log('[Rewarded] Cleanup listeners');
-      unsubLoad();
-      unsubError();
       unsubEarned();
-      unsubClosed();
     };
-  }, [unitId, setAdFreeForHours]);
+  }, [setAdFreeForHours]);
+
 
   async function show() {
-    const rewarded = rewardedRef.current;
-    if (!rewarded) {
-      console.warn('[Rewarded] show() called but ref is null');
-      return false;
-    }
-
+    if (!rewardedAd) return false;
     if (!loaded) {
       console.log('[Rewarded] show() called but ad not loaded');
+      loadAd();
       return false;
     }
 
     try {
       console.log('[Rewarded] Showing ad');
-      await rewarded.show();
+      await rewardedAd.show();
       return true;
     } catch (e) {
       console.warn('[Rewarded] show() failed', e);

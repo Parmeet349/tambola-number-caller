@@ -24,6 +24,7 @@ yarn-error.*
 # macOS
 .DS_Store
 *.pem
+._*
 
 # Windows
 Thumbs.db

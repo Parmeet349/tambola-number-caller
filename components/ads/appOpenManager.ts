@@ -1,9 +1,8 @@
 // components/ads/appOpenManager.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState, AppStateStatus } from 'react-native';
 import { AdEventType, AppOpenAd } from 'react-native-google-mobile-ads';
-// import {TEST_IDS, PROD_IDS } from './admob'; // adjust import if path differs
-import { PROD_IDS } from './admob'; // adjust import if path differs
+import { AppState, AppStateStatus } from 'react-native';
+import { PROD_IDS } from './admob';
 
 const STORAGE_KEY = 'tambola_app_open_meta_v1';
 
@@ -46,25 +45,24 @@ async function saveMeta() {
 
 function ensureAdInstance() {
     if (!appOpenAd) {
-        // appOpenAd = AppOpenAd.createForAdRequest(TEST_IDS.APP_OPEN, {
-        appOpenAd = AppOpenAd.createForAdRequest(PROD_IDS.APP_OPEN, {
+        appOpenAd = AppOpenAd.createForAdRequest(PROD_IDS.APP_OPEN!, {
             requestNonPersonalizedAdsOnly: true,
         });
 
         appOpenAd.addAdEventListener(AdEventType.LOADED, () => {
             isLoaded = true;
             isLoading = false;
-            // console.log('AppOpen loaded');
+            console.log('[AppOpen] Ad loaded');
         });
 
         appOpenAd.addAdEventListener(AdEventType.ERROR, (err) => {
-            console.warn('AppOpen error', err);
+            console.warn('[AppOpen] Error', err);
             isLoaded = false;
             isLoading = false;
         });
 
         appOpenAd.addAdEventListener(AdEventType.CLOSED, () => {
-            // console.log('AppOpen closed');
+            console.log('[AppOpen] Closed — reloading');
             isLoaded = false;
             isLoading = false;
             appOpenAd?.load();

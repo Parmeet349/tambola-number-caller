@@ -6,13 +6,14 @@ import AboutScreen from '../../components/screens/AboutScreen';
 import GameScreen from '../../components/screens/GameScreen';
 import HistoryModalImported from '../../components/screens/HistoryModal';
 import HomeScreen from '../../components/screens/HomeScreen';
+import { useTheme } from '../../utils/store/themeState';
 
 import { Text, View } from 'react-native';
 
 
 export type RootStackParamList = {
   Home: undefined;
-  Game: { initialMode: 'manual' | 'auto'; initialSpeed: 'slow' | 'medium' | 'fast'; initialMute?: boolean };
+  Game: { initialMode?: 'manual' | 'auto'; initialSpeed?: 'slow' | 'medium' | 'fast'; initialMute?: boolean; hostName?: string };
   HistoryModal: { historySnapshot: number[] };
   About: undefined;
   Privacy: undefined;
@@ -44,17 +45,29 @@ const Privacy = ensureComponent(AboutScreen as any, 'PrivacyScreen');
 
 
 export default function TabsIndex() {
+  const { currentTheme } = useTheme();
+
   return (
-    // <AdStateProvider>
-    <Stack.Navigator initialRouteName="Home">
+    <Stack.Navigator 
+      initialRouteName="Home"
+      screenOptions={{
+        headerStyle: {
+          backgroundColor: currentTheme.cardBg,
+        },
+        headerTintColor: currentTheme.primary,
+        headerTitleStyle: {
+          fontWeight: '800',
+          color: currentTheme.text,
+        },
+      }}
+    >
       <Stack.Screen name="Home" component={Home} options={{ title: 'Tambola — Home', headerShown: false }} />
-      <Stack.Screen name="Game" component={Game} options={{ title: 'Tambola — Game', headerBackTitle: 'Back' }} />
-      <Stack.Screen name="About" component={About} options={{ title: 'Tambola — Game', headerBackTitle: 'Back' }} />
-      <Stack.Screen name="Privacy" component={Privacy} options={{ title: 'Privacy Policy', headerBackTitle: 'Back' }} />
+      <Stack.Screen name="Game" component={Game} options={{ title: 'Tambola — Game', headerShown: false }} />
+      <Stack.Screen name="About" component={About} options={{ title: 'Tambola — About', headerShown: false }} />
+      <Stack.Screen name="Privacy" component={Privacy} options={{ title: 'Privacy Policy' }} />
       <Stack.Group screenOptions={{ presentation: 'modal' }}>
         <Stack.Screen name="HistoryModal" component={HistoryModal} options={{ title: 'Called Numbers' }} />
       </Stack.Group>
     </Stack.Navigator>
-    // </AdStateProvider>
   );
 }

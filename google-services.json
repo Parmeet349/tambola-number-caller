@@ -1,0 +1,31 @@
+{
+  "project_info": {
+    "project_number": "102281546087",
+    "firebase_url": "https://tambola-number-caller.firebaseio.com",
+    "project_id": "tambola-number-caller",
+    "storage_bucket": "tambola-number-caller.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:102281546087:android:b4ca31d76a23aa169407c2",
+        "android_client_info": {
+          "package_name": "com.geekypajis.tambolanumbers"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD9XDlDEHCtbOh84sdBYhMKQmLtB_2zZ7E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      },
+      "admob_app_id": "ca-app-pub-1373723692607134~4420249362"
+    }
+  ],
+  "configuration_version": "1"
+}

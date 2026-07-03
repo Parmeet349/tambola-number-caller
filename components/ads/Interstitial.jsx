@@ -1,125 +1,99 @@
 // components/ads/Interstitial.jsx
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AdEventType, InterstitialAd } from 'react-native-google-mobile-ads';
-// import { TEST_IDS, PROD_IDS } from './admob';
 import { PROD_IDS } from './admob';
 
+// Global singleton instance
+let interstitialAd = null;
+let isLoaded = false;
+let isLoading = false;
+const listeners = new Set();
+
+function notifyListeners() {
+  listeners.forEach((l) => l(isLoaded));
+}
+
+function setupAd(unitId) {
+  if (interstitialAd) return; // already setup
+
+  interstitialAd = InterstitialAd.createForAdRequest(unitId, {
+    requestNonPersonalizedAdsOnly: true,
+  });
+
+  // Event Listeners
+  interstitialAd.addAdEventListener(AdEventType.LOADED, () => {
+    isLoaded = true;
+    isLoading = false;
+    notifyListeners();
+  });
+
+  interstitialAd.addAdEventListener(AdEventType.ERROR, (error) => {
+    console.warn('Interstitial error', error);
+    isLoaded = false;
+    isLoading = false;
+    notifyListeners();
+  });
+
+  interstitialAd.addAdEventListener(AdEventType.CLOSED, () => {
+    isLoaded = false;
+    notifyListeners();
+    loadAd(); // Reload immediately after closing
+  });
+}
+
+function loadAd() {
+  if (!interstitialAd) return;
+  if (isLoaded || isLoading) return;
+
+  try {
+    isLoading = true;
+    interstitialAd.load();
+  } catch (error) {
+    console.warn('Interstitial load failed', error);
+    isLoading = false;
+  }
+}
+
 /**
- * Hook to manage an interstitial ad.
+ * Hook to manage an interstitial ad (Singleton Version)
  * Usage:
  * const { loaded, show } = useInterstitial();
- * // call show() when you want to display the ad
  */
-// export function useInterstitial(unitId = TEST_IDS.INTERSTITIAL) {
 export function useInterstitial(unitId = PROD_IDS.INTERSTITIAL) {
-  // create the ad instance once
-  const interstitialRef = useRef(
-    InterstitialAd.createForAdRequest(unitId, { requestNonPersonalizedAdsOnly: true })
-  );
+  // 1. Setup global instance if needed
+  if (!interstitialAd) {
+    setupAd(unitId);
+  }
 
-  const [loaded, setLoaded] = useState(false);
+  // 2. Local state to trigger re-renders
+  const [loaded, setLoaded] = useState(isLoaded);
 
+  // 3. Subscribe to global changes
   useEffect(() => {
-    const interstitial = interstitialRef.current;
-    if (!interstitial) {
-      console.warn('Interstitial ad instance unavailable');
-      return;
-    }
+    const handler = (status) => setLoaded(status);
+    listeners.add(handler);
 
-    // Newer API: use addAdEventListener for specific events.
-    // Each call returns an unsubscribe function.
-    const unsubscribers = [];
+    // Trigger load if needed
+    loadAd();
 
-    try {
-      // LOADED
-      if (typeof interstitial.addAdEventListener === 'function') {
-        unsubscribers.push(
-          interstitial.addAdEventListener(AdEventType.LOADED, () => {
-            setLoaded(true);
-          })
-        );
-        // ERROR
-        unsubscribers.push(
-          interstitial.addAdEventListener(AdEventType.ERROR, (error) => {
-            console.warn('Interstitial error', error);
-            setLoaded(false);
-          })
-        );
-        // CLOSED
-        unsubscribers.push(
-          interstitial.addAdEventListener(AdEventType.CLOSED, () => {
-            setLoaded(false);
-            // reload for next time
-            if (typeof interstitial.load === 'function') {
-              interstitial.load();
-            }
-          })
-        );
-      } else if (typeof interstitial.onAdEvent === 'function') {
-        // Backwards-compat fallback (older versions)
-        const cb = (type, error) => {
-          if (type === AdEventType.LOADED) setLoaded(true);
-          if (type === AdEventType.ERROR) {
-            console.warn('Interstitial error', error);
-            setLoaded(false);
-          }
-          if (type === AdEventType.CLOSED) {
-            setLoaded(false);
-            interstitial.load && interstitial.load();
-          }
-        };
-        const cleanup = interstitial.onAdEvent(cb);
-        if (typeof cleanup === 'function') unsubscribers.push(cleanup);
-      } else {
-        console.warn('Interstitial ad API does not expose addAdEventListener or onAdEvent');
-      }
-    } catch (e) {
-      console.warn('Failed to attach interstitial listeners', e);
-    }
-
-    // Start loading
-    try {
-      interstitial.load && interstitial.load();
-    } catch (e) {
-      console.warn('Failed to call interstitial.load()', e);
-    }
-
-    // cleanup
     return () => {
-      try {
-        unsubscribers.forEach((u) => {
-          try { if (typeof u === 'function') u(); } catch (e) { /* ignore */ }
-        });
-      } catch (e) {
-        // best-effort
-      }
+      listeners.delete(handler);
     };
-  }, [unitId]);
+  }, []);
 
+  // 4. Show function
   async function show() {
-    const interstitial = interstitialRef.current;
-    if (!interstitial) {
-      console.warn('No interstitial instance available to show');
+    if (!interstitialAd) return false;
+    if (!isLoaded) {
+      console.log('Interstitial not loaded yet');
+      // Attempt load again just in case
+      loadAd();
       return false;
     }
 
     try {
-      // Prefer the library's isLoaded/isLoaded API if present.
-      if (typeof interstitial.isLoaded === 'function') {
-        const ready = await interstitial.isLoaded();
-        if (!ready) {
-          console.log('Interstitial not loaded yet');
-          return false;
-        }
-      }
-      // show - some versions expose show() directly on the instance
-      if (typeof interstitial.show === 'function') {
-        await interstitial.show();
-        return true;
-      }
-
-      console.warn('Interstitial show API not available');
-      return false;
+      await interstitialAd.show();
+      return true;
     } catch (e) {
       console.warn('Failed to show interstitial', e);
       return false;
