@@ -6,6 +6,7 @@ import AboutScreen from '../../components/screens/AboutScreen';
 import GameScreen from '../../components/screens/GameScreen';
 import HistoryModalImported from '../../components/screens/HistoryModal';
 import HomeScreen from '../../components/screens/HomeScreen';
+import PrivacyScreen from '../../components/screens/PrivacyScreen';
 import { useTheme } from '../../utils/store/themeState';
 
 import { Text, View } from 'react-native';
@@ -39,7 +40,7 @@ const HistoryModal = ensureComponent(HistoryModalImported as any, 'HistoryModal'
 const Home = ensureComponent(HomeScreen as any, 'HomeScreen');
 const Game = ensureComponent(GameScreen as any, 'GameScreen');
 const About = ensureComponent(AboutScreen as any, 'AboutScreen');
-const Privacy = ensureComponent(AboutScreen as any, 'PrivacyScreen');
+const Privacy = ensureComponent(PrivacyScreen as any, 'PrivacyScreen');
 
 // import { AdStateProvider } from '../../utils/store/adState';
 

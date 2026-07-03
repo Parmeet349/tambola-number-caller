@@ -3,13 +3,13 @@ import { useEffect, useState } from 'react';
 import {
   AdEventType,
   RewardedAdEventType,
-  RewardedInterstitialAd,
+  RewardedAd,
 } from 'react-native-google-mobile-ads';
 import { PROD_IDS } from '../../components/ads/admob';
 import { useAdState } from '../store/adState';
 
 // Global Singleton State
-let rewardedAd: RewardedInterstitialAd | null = null;
+let rewardedAd: RewardedAd | null = null;
 let isLoaded = false;
 let isLoading = false;
 const listeners = new Set<(loaded: boolean, loading: boolean) => void>();
@@ -21,7 +21,7 @@ function notifyListeners() {
 function setupAd(unitId: string) {
   if (rewardedAd) return;
 
-  rewardedAd = RewardedInterstitialAd.createForAdRequest(unitId, {
+  rewardedAd = RewardedAd.createForAdRequest(unitId, {
     requestNonPersonalizedAdsOnly: true,
   });
 

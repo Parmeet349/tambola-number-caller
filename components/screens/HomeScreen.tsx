@@ -302,7 +302,7 @@ export default function HomeScreen({ navigation }: Props) {
           <View style={[styles.noteWrap, { borderTopColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
             <Text style={[styles.noteTitle, { color: currentTheme.text }]}>What happens next</Text>
             <Text style={[styles.noteText, { color: currentTheme.textLight }]}>
-              You'll be taken to the Game screen. Use the History button in the game to view all called numbers as a modal — your current game will remain unchanged.
+              {"You'll be taken to the Game screen. Use the History button in the game to view all called numbers as a modal — your current game will remain unchanged."}
             </Text>
           </View>
         </View>

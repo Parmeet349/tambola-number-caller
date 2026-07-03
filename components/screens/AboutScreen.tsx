@@ -41,13 +41,8 @@ export default function AboutScreen() {
     }
   };
 
-  const openPrivacy = async () => {
-    const url = 'https://www.askstudios.net/tambola-privacy-policy';
-    try {
-      await Linking.openURL(url);
-    } catch (e) {
-      Alert.alert('Error', 'Cannot open privacy policy link.');
-    }
+  const openPrivacy = () => {
+    navigation.navigate('Privacy' as any);
   };
 
   const openRating = () => {

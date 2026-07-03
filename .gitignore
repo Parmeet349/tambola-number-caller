@@ -57,3 +57,8 @@ node_modules/
 *.apk
 *.aab
 *.apks
+
+# Firebase files
+google-services.json
+GoogleService-Info.plist
+commands.txt
