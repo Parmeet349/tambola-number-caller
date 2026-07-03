@@ -5,31 +5,45 @@ import { useRewardedAd } from '../utils/hooks/useRewardedAd';
 import { useTheme } from '../utils/store/themeState';
 
 export default function RewardedButton() {
-  const { loaded, show, loading: adLoading } = useRewardedAd();
+  const { show, loading: adLoading } = useRewardedAd();
   const { currentTheme } = useTheme();
   const [processing, setProcessing] = useState(false);
 
   async function onWatch() {
-    setProcessing(true);
-    try {
-      const shown = await show();
-      if (!shown) {
-        Alert.alert('Ad not ready', 'Please try again later.');
-      }
-    } catch (e) {
-      console.warn('Error showing rewarded ad', e);
-      Alert.alert('Ad error', 'Something went wrong while showing ad.');
-    } finally {
-      setProcessing(false);
-    }
+    Alert.alert(
+      'Watch Ad for Reward',
+      'This will play a non-skippable video advertisement. Watching it to completion will reward you with 30 minutes of ad-free gameplay. Do you want to proceed?',
+      [
+        {
+          text: 'No',
+          style: 'cancel',
+        },
+        {
+          text: 'Yes',
+          onPress: async () => {
+            setProcessing(true);
+            try {
+              const shown = await show();
+              if (!shown) {
+                Alert.alert('Ad is Loading', 'The ad is currently loading. Please wait a moment and try again.');
+              }
+            } catch (e) {
+              console.warn('Error showing rewarded ad', e);
+              Alert.alert('Ad error', 'Something went wrong while showing ad.');
+            } finally {
+              setProcessing(false);
+            }
+          },
+        },
+      ]
+    );
   }
 
-  const disabled = !loaded || adLoading || processing;
+  const disabled = adLoading || processing;
 
   const label = (() => {
     if (processing || adLoading) return 'Loading Ad...';
-    if (loaded) return '🎬 Watch Ad → 30 min Ad-Free';
-    return 'Ad not ready';
+    return '🎬 Watch Ad → 30 min Ad-Free';
   })();
 
   return (

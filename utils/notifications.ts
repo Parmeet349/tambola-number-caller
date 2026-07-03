@@ -32,27 +32,56 @@ export async function requestNotificationPermissions() {
   return false;
 }
 
-export async function scheduleGameNightReminder(enabled: boolean) {
+export interface ReminderConfig {
+  enabled: boolean;
+  type: 'weekly' | 'once';
+  weekday: number; // 1 = Sunday, 7 = Saturday
+  hour: number; // 0-23
+  minute: number; // 0-59
+  onceDate?: string; // YYYY-MM-DD
+}
+
+export async function scheduleGameNightReminder(config: ReminderConfig) {
   await Notifications.cancelAllScheduledNotificationsAsync();
 
-  if (!enabled) return false;
+  if (!config.enabled) return false;
 
   const hasPermission = await requestNotificationPermissions();
   if (!hasPermission) return false;
 
+  let trigger: any;
+
+  if (config.type === 'weekly') {
+    trigger = {
+      weekday: config.weekday,
+      hour: config.hour,
+      minute: config.minute,
+      repeats: true,
+      type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
+    };
+  } else if (config.onceDate) {
+    // One-time reminder
+    // Parse target date and time in local timezone
+    const [year, month, day] = config.onceDate.split('-').map(Number);
+    const dateObj = new Date(year, month - 1, day, config.hour, config.minute, 0);
+
+    // If the target date/time has already passed, we cannot schedule it
+    if (dateObj.getTime() <= Date.now()) {
+      return false;
+    }
+
+    trigger = dateObj;
+  } else {
+    return false;
+  }
+
   await Notifications.scheduleNotificationAsync({
     content: {
       title: "🎲 Tambola Game Night!",
-      body: "Gather the family! It's time for your weekly Tambola game. Grab your tickets and let's play!",
+      body: "Gather the family! It's time for your Tambola game. Grab your tickets and let's play!",
       sound: true,
     },
-    trigger: {
-      weekday: 7, // Saturday
-      hour: 19,
-      minute: 0,
-      repeats: true,
-      type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
-    } as any,
+    trigger,
   });
 
   return true;

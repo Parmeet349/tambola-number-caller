@@ -23,7 +23,7 @@ export const TEST_IDS = {
 };
 
 
-export const PROD_IDS = {
+const REAL_PROD_IDS = {
   BANNER: Platform.select({
     ios: 'ca-app-pub-1373723692607134/1178550334',
     android: 'ca-app-pub-1373723692607134/9597257218',
@@ -41,3 +41,5 @@ export const PROD_IDS = {
     android: 'ca-app-pub-1373723692607134/9020217302',
   }),
 };
+
+export const PROD_IDS = __DEV__ ? TEST_IDS : REAL_PROD_IDS;

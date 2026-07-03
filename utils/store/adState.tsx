@@ -47,7 +47,12 @@ export const AdStateProvider: React.FC<{ children: React.ReactNode }> = ({ child
                     //
                     console.log('Loaded ad state from storage', { isPro: parsed.isPro, adFreeUntil: parsed.adFreeUntil });
 
-                    //   setAdFreeUntil(parsed.adFreeUntil ?? null);
+                    // --- TESTING REWARDED AD TIMER ---
+                    // To test the "Watch Ad" button repeatedly without waiting 30 minutes,
+                    // uncomment the lines below to force-clear the ad-free timer on app launch.
+                    // setAdFreeUntil(null);
+                    // try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ isPro: !!parsed.isPro, adFreeUntil: null })); } catch (e) { }
+                    // ---------------------------------
                 }
             } catch (e) {
                 console.warn('Failed to load ad state', e);

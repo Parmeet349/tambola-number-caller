@@ -2,8 +2,8 @@
 import { useEffect, useState } from 'react';
 import {
   AdEventType,
-  RewardedAdEventType,
   RewardedAd,
+  RewardedAdEventType,
 } from 'react-native-google-mobile-ads';
 import { PROD_IDS } from '../../components/ads/admob';
 import { useAdState } from '../store/adState';
@@ -37,6 +37,12 @@ function setupAd(unitId: string) {
     isLoaded = false;
     isLoading = false;
     notifyListeners();
+
+    // Auto-retry loading the ad after 15 seconds to prevent being stuck
+    setTimeout(() => {
+      console.log('[Rewarded Singleton] Retrying load after error...');
+      loadAd();
+    }, 15000);
   });
 
   rewardedAd.addAdEventListener(AdEventType.CLOSED, () => {

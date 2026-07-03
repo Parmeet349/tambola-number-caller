@@ -15,17 +15,51 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  Modal
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList } from '../../app/(tabs)/index';
 import { logEvent } from '../../utils/analytics';
 import { useAdState } from '../../utils/store/adState';
-import { scheduleGameNightReminder } from '../../utils/notifications';
+import { scheduleGameNightReminder, ReminderConfig } from '../../utils/notifications';
 import RewardedButton from '../RewardedButton';
 import { useTheme, THEMES } from '../../utils/store/themeState';
 
-const isIOS = Platform.OS === 'ios';
+interface CustomReminderConfig {
+  type: 'weekly' | 'once';
+  weekday: number; // 1 = Sunday, 7 = Saturday
+  hour: number; // 1-12
+  minute: number; // 0-59
+  period: 'AM' | 'PM';
+  onceDate: string; // YYYY-MM-DD
+}
+
+function get24Hour(hour12: number, period: 'AM' | 'PM'): number {
+  let hr = hour12;
+  if (period === 'PM' && hr < 12) hr += 12;
+  if (period === 'AM' && hr === 12) hr = 0;
+  return hr;
+}
+
+function getReminderDisplayText(config: CustomReminderConfig): string {
+  const timeStr = `${config.hour}:${String(config.minute).padStart(2, '0')} ${config.period}`;
+  if (config.type === 'weekly') {
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayName = days[config.weekday - 1] || 'Saturday';
+    return `Weekly on ${dayName}s at ${timeStr}`;
+  } else {
+    try {
+      const [year, month, day] = config.onceDate.split('-').map(Number);
+      const dateObj = new Date(year, month - 1, day);
+      const dateFormatted = dateObj.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+      return `${dateFormatted} at ${timeStr}`;
+    } catch (e) {
+      return `${config.onceDate} at ${timeStr}`;
+    }
+  }
+}
+
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -37,6 +71,23 @@ export default function HomeScreen({ navigation }: Props) {
   const [hostName, setHostName] = useState<string>('');
   const [resumeCount, setResumeCount] = useState<number | null>(null);
   const [reminderEnabled, setReminderEnabled] = useState<boolean>(false);
+  const [reminderConfig, setReminderConfig] = useState<CustomReminderConfig>({
+    type: 'weekly',
+    weekday: 7, // Saturday
+    hour: 7,
+    minute: 0,
+    period: 'PM',
+    onceDate: new Date().toISOString().split('T')[0],
+  });
+  const [tempConfig, setTempConfig] = useState<CustomReminderConfig>({
+    type: 'weekly',
+    weekday: 7,
+    hour: 7,
+    minute: 0,
+    period: 'PM',
+    onceDate: new Date().toISOString().split('T')[0],
+  });
+  const [reminderModalVisible, setReminderModalVisible] = useState(false);
   const { adFreeUntil } = useAdState();
 
   useFocusEffect(
@@ -60,6 +111,11 @@ export default function HomeScreen({ navigation }: Props) {
 
           const reminderStr = await AsyncStorage.getItem('@tambola_reminder');
           if (reminderStr === 'true') setReminderEnabled(true);
+
+          const configStr = await AsyncStorage.getItem('@tambola_reminder_config');
+          if (configStr) {
+            setReminderConfig(JSON.parse(configStr));
+          }
         } catch (e) { }
       })();
     }, [])
@@ -76,13 +132,53 @@ export default function HomeScreen({ navigation }: Props) {
     setReminderEnabled(val);
     try {
       await AsyncStorage.setItem('@tambola_reminder', val ? 'true' : 'false');
-      const success = await scheduleGameNightReminder(val);
+      const hr24 = get24Hour(reminderConfig.hour, reminderConfig.period);
+      const reminderPayload: ReminderConfig = {
+        enabled: val,
+        type: reminderConfig.type,
+        weekday: reminderConfig.weekday,
+        hour: hr24,
+        minute: reminderConfig.minute,
+        onceDate: reminderConfig.onceDate,
+      };
+      const success = await scheduleGameNightReminder(reminderPayload);
       if (val && !success) {
         setReminderEnabled(false);
         await AsyncStorage.setItem('@tambola_reminder', 'false');
-        Alert.alert('Permission Denied', 'Please enable notifications in your device settings to receive Game Night Reminders.');
+        Alert.alert('Reminder Setup Failed', 'Please ensure you select a future date/time, and enable notifications in your device settings.');
       }
     } catch (e) {}
+  };
+
+  const saveReminderConfig = async (newConfig: CustomReminderConfig) => {
+    try {
+      await AsyncStorage.setItem('@tambola_reminder_config', JSON.stringify(newConfig));
+      setReminderConfig(newConfig);
+      
+      setReminderEnabled(true);
+      await AsyncStorage.setItem('@tambola_reminder', 'true');
+
+      const hr24 = get24Hour(newConfig.hour, newConfig.period);
+      const reminderPayload: ReminderConfig = {
+        enabled: true,
+        type: newConfig.type,
+        weekday: newConfig.weekday,
+        hour: hr24,
+        minute: newConfig.minute,
+        onceDate: newConfig.onceDate,
+      };
+      const success = await scheduleGameNightReminder(reminderPayload);
+
+      if (!success) {
+        setReminderEnabled(false);
+        await AsyncStorage.setItem('@tambola_reminder', 'false');
+        Alert.alert('Reminder Setup Failed', 'Please ensure you select a future date and time, and check your notification settings.');
+      } else {
+        Alert.alert('Reminder Set', 'Your custom Tambola reminder has been successfully scheduled!');
+      }
+    } catch (e) {
+      console.warn('Failed to save reminder config', e);
+    }
   };
 
   const handleStart = async () => {
@@ -98,7 +194,7 @@ export default function HomeScreen({ navigation }: Props) {
     navigation.navigate('Game', { hostName } as any);
   };
 
-  const confirmExit = () => {
+  const confirmExit = useCallback(() => {
     Alert.alert('Hold on!', 'Are you sure you want to exit?', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -110,22 +206,12 @@ export default function HomeScreen({ navigation }: Props) {
         },
       },
     ]);
-  };
+  }, []);
 
-  const onHardwareBackPress = () => {
+  const onHardwareBackPress = useCallback(() => {
     confirmExit();
     return true; // VERY IMPORTANT
-  };
-
-
-
-  const handleExit = () => {
-    Alert.alert('Hold on!', 'Are you sure you want to exit?', [
-      { text: 'Cancel', onPress: () => null, style: 'cancel' },
-      { text: 'YES', onPress: () => BackHandler.exitApp() },
-    ]);
-    return true;
-  };
+  }, [confirmExit]);
 
   useFocusEffect(
     useCallback(() => {
@@ -136,9 +222,35 @@ export default function HomeScreen({ navigation }: Props) {
         );
         return () => backHandler.remove();
       }
-    }, [])
+    }, [onHardwareBackPress])
   );
+  const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  const datesList = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    const year = d.getFullYear();
+    const monthIndex = d.getMonth();
+    const dateNum = d.getDate();
+    
+    const dateStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dateNum).padStart(2, '0')}`;
+    const dayNum = dateNum;
+    const weekday = weekdayNames[d.getDay()];
+    const month = monthNames[monthIndex];
+    datesList.push({ dateStr, dayNum, weekday, month });
+  }
 
+  const WEEKDAYS = [
+    { id: 1, label: 'Sun' },
+    { id: 2, label: 'Mon' },
+    { id: 3, label: 'Tue' },
+    { id: 4, label: 'Wed' },
+    { id: 5, label: 'Thu' },
+    { id: 6, label: 'Fri' },
+    { id: 7, label: 'Sat' },
+  ];
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: currentTheme.background }]}>
@@ -289,8 +401,21 @@ export default function HomeScreen({ navigation }: Props) {
             />
           </View>
 
-          <View style={[styles.row, { marginTop: 12 }]}>
-            <Text style={[styles.rowLabel, { color: currentTheme.text }]}>Game Night Reminder (Sat 7PM)</Text>
+          <View style={[styles.row, { marginTop: 12, alignItems: 'center' }]}>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={[styles.rowLabel, { color: currentTheme.text }]}>Game Night Reminder</Text>
+              <TouchableOpacity 
+                onPress={() => {
+                  setTempConfig(reminderConfig);
+                  setReminderModalVisible(true);
+                }}
+                style={{ marginTop: 4 }}
+              >
+                <Text style={{ color: reminderEnabled ? currentTheme.primary : currentTheme.textLight, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' }}>
+                  {getReminderDisplayText(reminderConfig)}
+                </Text>
+              </TouchableOpacity>
+            </View>
             <Switch
               value={reminderEnabled}
               onValueChange={handleReminderToggle}
@@ -329,6 +454,214 @@ export default function HomeScreen({ navigation }: Props) {
           <Text style={styles.startBtnText}>START GAME</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={reminderModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setReminderModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: currentTheme.isDark ? '#1b1433' : '#ffffff', borderColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0', borderWidth: 1 }]}>
+            
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: currentTheme.text }]}>⏰ Custom Reminder</Text>
+              <TouchableOpacity onPress={() => setReminderModalVisible(false)} style={styles.modalCloseBtn}>
+                <Text style={[styles.modalCloseBtnText, { color: currentTheme.textLight }]}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Scrollable Modal Content */}
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+              
+              {/* Reminder Type Selection */}
+              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Reminder Type</Text>
+              <View style={[styles.typeToggleRow, { backgroundColor: currentTheme.isDark ? '#120b24' : '#f5f5f5' }]}>
+                <TouchableOpacity
+                  onPress={() => setTempConfig(prev => ({ ...prev, type: 'weekly' }))}
+                  style={[
+                    styles.typeToggleBtn,
+                    tempConfig.type === 'weekly' && { backgroundColor: currentTheme.primary }
+                  ]}
+                >
+                  <Text style={[styles.typeToggleText, { color: tempConfig.type === 'weekly' ? '#fff' : currentTheme.textLight }]}>
+                    Weekly Repeating
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setTempConfig(prev => ({ ...prev, type: 'once' }))}
+                  style={[
+                    styles.typeToggleBtn,
+                    tempConfig.type === 'once' && { backgroundColor: currentTheme.primary }
+                  ]}
+                >
+                  <Text style={[styles.typeToggleText, { color: tempConfig.type === 'once' ? '#fff' : currentTheme.textLight }]}>
+                    One-Time Event
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Weekly Settings */}
+              {tempConfig.type === 'weekly' ? (
+                <>
+                  <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Day</Text>
+                  <View style={styles.weekdayContainer}>
+                    {WEEKDAYS.map((day) => {
+                      const isSelected = tempConfig.weekday === day.id;
+                      return (
+                        <TouchableOpacity
+                          key={day.id}
+                          onPress={() => setTempConfig(prev => ({ ...prev, weekday: day.id }))}
+                          style={[
+                            styles.weekdayCircle,
+                            {
+                              borderColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#3c2a63' : '#ddd'),
+                              backgroundColor: isSelected ? currentTheme.primary : 'transparent',
+                            }
+                          ]}
+                        >
+                          <Text style={[styles.weekdayText, { color: isSelected ? '#fff' : currentTheme.text }]}>
+                            {day.label.slice(0, 1)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : (
+                <>
+                  {/* One-Time Date Picker */}
+                  <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Date</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 4 }}>
+                    {datesList.map((item) => {
+                      const isSelected = tempConfig.onceDate === item.dateStr;
+                      return (
+                        <TouchableOpacity
+                          key={item.dateStr}
+                          onPress={() => setTempConfig(prev => ({ ...prev, onceDate: item.dateStr }))}
+                          style={[
+                            styles.dateCard,
+                            {
+                              borderColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#3c2a63' : '#ddd'),
+                              backgroundColor: isSelected ? currentTheme.primary : 'transparent',
+                            }
+                          ]}
+                        >
+                          <Text style={[styles.dateCardWeekday, { color: isSelected ? '#fff' : currentTheme.textLight }]}>
+                            {item.weekday}
+                          </Text>
+                          <Text style={[styles.dateCardDay, { color: isSelected ? '#fff' : currentTheme.text, fontWeight: '800' }]}>
+                            {item.dayNum}
+                          </Text>
+                          <Text style={[styles.dateCardMonth, { color: isSelected ? '#fff' : currentTheme.textLight }]}>
+                            {item.month}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </>
+              )}
+
+              {/* Hour Selection */}
+              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Hour</Text>
+              <View style={styles.timeGrid}>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((hr) => {
+                  const isSelected = tempConfig.hour === hr;
+                  return (
+                    <TouchableOpacity
+                      key={hr}
+                      onPress={() => setTempConfig(prev => ({ ...prev, hour: hr }))}
+                      style={[
+                        styles.timeGridButton,
+                        {
+                          backgroundColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#251b40' : '#f5f5f5'),
+                        }
+                      ]}
+                    >
+                      <Text style={{ color: isSelected ? '#fff' : currentTheme.text, fontWeight: '600' }}>
+                        {hr}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Minute Selection */}
+              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Minute</Text>
+              <View style={styles.timeGrid}>
+                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((min) => {
+                  const isSelected = tempConfig.minute === min;
+                  return (
+                    <TouchableOpacity
+                      key={min}
+                      onPress={() => setTempConfig(prev => ({ ...prev, minute: min }))}
+                      style={[
+                        styles.timeGridButton,
+                        {
+                          backgroundColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#251b40' : '#f5f5f5'),
+                        }
+                      ]}
+                    >
+                      <Text style={{ color: isSelected ? '#fff' : currentTheme.text, fontWeight: '600' }}>
+                        {String(min).padStart(2, '0')}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Period selection */}
+              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>AM / PM</Text>
+              <View style={styles.periodRow}>
+                {['AM', 'PM'].map((p) => {
+                  const isSelected = tempConfig.period === p;
+                  return (
+                    <TouchableOpacity
+                      key={p}
+                      onPress={() => setTempConfig(prev => ({ ...prev, period: p as 'AM' | 'PM' }))}
+                      style={[
+                        styles.periodButton,
+                        {
+                          backgroundColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#251b40' : '#f5f5f5'),
+                          flex: 1,
+                          marginHorizontal: 4,
+                        }
+                      ]}
+                    >
+                      <Text style={{ color: isSelected ? '#fff' : currentTheme.text, fontWeight: 'bold' }}>
+                        {p}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+            </ScrollView>
+
+            {/* Footer Buttons */}
+            <View style={[styles.modalFooter, { borderTopColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
+              <TouchableOpacity
+                onPress={() => setReminderModalVisible(false)}
+                style={[styles.modalFooterBtn, { backgroundColor: currentTheme.isDark ? '#251b40' : '#f5f5f5' }]}
+              >
+                <Text style={[styles.modalFooterBtnText, { color: currentTheme.text }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setReminderModalVisible(false);
+                  saveReminderConfig(tempConfig);
+                }}
+                style={[styles.modalFooterBtn, { backgroundColor: currentTheme.primary }]}
+              >
+                <Text style={[styles.modalFooterBtnText, { color: '#fff' }]}>Save</Text>
+              </TouchableOpacity>
+            </View>
+
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -437,5 +770,142 @@ const styles = StyleSheet.create({
   },
   themePillText: {
     fontSize: 13,
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    maxHeight: '85%',
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  modalCloseBtn: {
+    padding: 4,
+  },
+  modalCloseBtnText: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  modalSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 14,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  typeToggleRow: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 10,
+  },
+  typeToggleBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  typeToggleText: {
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  weekdayContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginVertical: 4,
+  },
+  weekdayCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+  },
+  weekdayText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  dateCard: {
+    width: 60,
+    height: 80,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  dateCardWeekday: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  dateCardDay: {
+    fontSize: 18,
+    marginVertical: 2,
+  },
+  dateCardMonth: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  timeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  timeGridButton: {
+    width: '22%',
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodRow: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  periodButton: {
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+  },
+  modalFooterBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+  },
+  modalFooterBtnText: {
+    fontWeight: '700',
+    fontSize: 15,
   },
 });
