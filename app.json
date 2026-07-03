@@ -2,7 +2,7 @@
   "expo": {
     "name": "Tambola Number Caller (Housie)",
     "slug": "tambola-number-caller",
-    "version": "1.5.7",
+    "version": "1.5.8",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": "tambolanumbercaller",
@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.geekypajis.tambolanumbers",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "infoPlist": {
         "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads and improve the app experience.",
         "ITSAppUsesNonExemptEncryption": false
@@ -24,7 +24,7 @@
       "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/logo.png"
