@@ -1,35 +1,32 @@
-// src/components/RewardedButton.tsx
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Text, TouchableOpacity } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRewardedAd } from '../utils/hooks/useRewardedAd';
 import { useTheme } from '../utils/store/themeState';
 
 export default function RewardedButton() {
   const { show, loading: adLoading } = useRewardedAd();
-  const { currentTheme } = useTheme();
+  const { currentTheme: T } = useTheme();
+  const isDark = T.isDark;
   const [processing, setProcessing] = useState(false);
 
   async function onWatch() {
     Alert.alert(
-      'Watch Ad for Reward',
-      'This will play a non-skippable video advertisement. Watching it to completion will reward you with 30 minutes of ad-free gameplay. Do you want to proceed?',
+      '30 Minutes Ad-Free',
+      'Watch a quick sponsor video to enjoy 30 minutes of uninterrupted, ad-free play!',
       [
+        { text: 'Not Now', style: 'cancel' },
         {
-          text: 'No',
-          style: 'cancel',
-        },
-        {
-          text: 'Yes',
+          text: 'Watch Video',
           onPress: async () => {
             setProcessing(true);
             try {
               const shown = await show();
               if (!shown) {
-                Alert.alert('Ad is Loading', 'The ad is currently loading. Please wait a moment and try again.');
+                Alert.alert('Loading Video', 'The video is loading. Please try again in a moment.');
               }
             } catch (e) {
-              console.warn('Error showing rewarded ad', e);
-              Alert.alert('Ad error', 'Something went wrong while showing ad.');
+              Alert.alert('Notice', 'Could not load video at this time. Please try again later.');
             } finally {
               setProcessing(false);
             }
@@ -41,31 +38,45 @@ export default function RewardedButton() {
 
   const disabled = adLoading || processing;
 
-  const label = (() => {
-    if (processing || adLoading) return 'Loading Ad...';
-    return '🎬 Watch Ad → 30 min Ad-Free';
-  })();
-
   return (
     <TouchableOpacity
       onPress={onWatch}
       disabled={disabled}
-      style={{
-        backgroundColor: disabled
-          ? (currentTheme.isDark ? '#1b1433' : '#e0e0e0')
-          : currentTheme.primary,
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        borderRadius: 12,
-        alignItems: 'center',
-        opacity: disabled ? 0.6 : 1,
-      }}
+      style={[
+        styles.btn,
+        {
+          backgroundColor: disabled ? (isDark ? '#1b1433' : '#f0f0f0') : (isDark ? '#251b40' : '#fff3e0'),
+          borderColor: isDark ? '#3c2a63' : '#ffcc80',
+          opacity: disabled ? 0.6 : 1,
+        },
+      ]}
+      activeOpacity={0.85}
     >
       {processing || adLoading ? (
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={T.primary} size="small" />
       ) : (
-        <Text style={{ fontWeight: '800', color: '#fff', fontSize: 14 }}>{label}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+          <Ionicons name="play-circle-outline" size={18} color={isDark ? '#ffb74d' : '#e65100'} />
+          <Text style={[styles.btnText, { color: isDark ? '#ffb74d' : '#e65100' }]}>
+            Watch Video → 30m Ad-Free
+          </Text>
+        </View>
       )}
     </TouchableOpacity>
   );
 }
+
+const styles = StyleSheet.create({
+  btn: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  btnText: { fontWeight: '800', fontSize: 14 },
+});

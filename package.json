@@ -1,11 +1,12 @@
 {
   "name": "tambola-number-caller",
   "main": "expo-router/entry",
-  "version": "1.5.8",
+  "version": "1.6.0",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo run:android",
+    "android": "find . -name '._*' -delete 2>/dev/null || true; expo run:android",
+    "clean:mac": "find . -name '._*' -delete 2>/dev/null || true",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
@@ -44,6 +45,7 @@
     "react-native-confetti-cannon": "^1.5.2",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-google-mobile-ads": "^16.0.0",
+    "react-native-purchases": "^10.12.2",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",

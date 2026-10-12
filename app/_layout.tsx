@@ -2,14 +2,16 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { View } from 'react-native';
 import 'react-native-reanimated';
 
 import { initAds } from '../components/ads/admob';
 import { attachAppOpenAppStateListener, initAppOpenAds, maybeShowAppOpenAd } from '../components/ads/appOpenManager';
+import AnimatedSplashScreen from '../components/screens/AnimatedSplashScreen';
 
 import { AdStateProvider } from '../utils/store/adState';
-import { ThemeProvider as AppThemeProvider } from '../utils/store/themeState';
+import { ThemeProvider as AppThemeProvider, useTheme } from '../utils/store/themeState';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -17,18 +19,33 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-export default function RootLayout() {
+function RootContent() {
   const colorScheme = useColorScheme();
+  const { currentTheme } = useTheme();
+  const [splashFinished, setSplashFinished] = useState(false);
 
-  // useEffect(() => {
-  //   initAds().then(() => console.log('Ad SDK initialized'));
-  // }, []);
-  // useEffect(() => {
-  //   initPurchases().catch(() => { });
-  //   // initAds().catch(() => {}); // your ad sdk init
-  //   initAds().then(() => console.log('Ad SDK initialized'));
-  // }, []);
+  return (
+    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <AdStateProvider>
+        <View style={{ flex: 1 }}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          </Stack>
+          {!splashFinished && (
+            <AnimatedSplashScreen
+              accent={currentTheme.primary}
+              onFinish={() => setSplashFinished(true)}
+            />
+          )}
+        </View>
+      </AdStateProvider>
+      <StatusBar style={!splashFinished ? 'light' : 'auto'} />
+    </ThemeProvider>
+  );
+}
 
+export default function RootLayout() {
   useEffect(() => {
     (async () => {
       try {
@@ -48,14 +65,8 @@ export default function RootLayout() {
 
         // 4) Attach foreground listener with ad-free state check
         attachAppOpenAppStateListener(() => {
-          // Check persisted ad-free state synchronously from memory
-          // The AdStateProvider hydrates this on mount, so by the time
-          // the user foregrounds the app, this will be up-to-date.
           try {
-            // We read from the AdStateProvider's persisted key
-            // This is a sync check — AsyncStorage won't work here,
-            // but the app open manager already has its own guards.
-            return false; // Default: not ad-free. The provider handles this.
+            return false;
           } catch {
             return false;
           }
@@ -67,19 +78,9 @@ export default function RootLayout() {
     })();
   }, []);
 
-
-
   return (
     <AppThemeProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <AdStateProvider>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-          </Stack>
-        </AdStateProvider>
-        <StatusBar style="auto" />
-      </ThemeProvider>
+      <RootContent />
     </AppThemeProvider>
   );
 }

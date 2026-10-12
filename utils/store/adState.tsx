@@ -1,104 +1,129 @@
 // utils/store/adState.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useState } from 'react';
-
+import {
+  addCustomerInfoUpdateListener,
+  getCustomerInfo,
+  hasProEntitlement,
+  initPurchases,
+} from '../purchases';
 
 const STORAGE_KEY = 'ad_state_v1';
 
 type AdState = {
-    isPro: boolean;
-    adFreeUntil: number | null;
-    setPro: (v: boolean) => void;
-    setAdFreeForHours: (hours: number) => void;
-    clearAdFree: () => void;
-    showAds: boolean;
-    reloadFromServer: () => Promise<void>;
+  isPro: boolean;
+  adFreeUntil: number | null;
+  setPro: (v: boolean) => void;
+  setAdFreeForHours: (hours: number) => void;
+  clearAdFree: () => void;
+  showAds: boolean;
+  reloadFromServer: () => Promise<void>;
 };
 
 const defaultState: AdState = {
-    isPro: false,
-    adFreeUntil: null,
-    setPro: () => { },
-    setAdFreeForHours: () => { },
-    clearAdFree: () => { },
-    showAds: true,
-    reloadFromServer: async () => { },
+  isPro: false,
+  adFreeUntil: null,
+  setPro: () => {},
+  setAdFreeForHours: () => {},
+  clearAdFree: () => {},
+  showAds: true,
+  reloadFromServer: async () => {},
 };
 
 const AdStateContext = createContext<AdState>(defaultState);
 
 export const AdStateProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [isPro, setIsPro] = useState<boolean>(false);
-    const [adFreeUntil, setAdFreeUntil] = useState<number | null>(null);
+  const [isPro, setIsPro] = useState<boolean>(false);
+  const [adFreeUntil, setAdFreeUntil] = useState<number | null>(null);
 
-    useEffect(() => {
-        (async () => {
-            try {
-                let raw = await AsyncStorage.getItem(STORAGE_KEY);
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    setIsPro(!!parsed.isPro);
-                    //   set ad-free until timestamp if valid else null
-                    setAdFreeUntil(
-                        parsed.adFreeUntil && typeof parsed.adFreeUntil === 'number' && parsed.adFreeUntil > Date.now()
-                            ? parsed.adFreeUntil
-                            : null
-                    );
-                    //
-                    console.log('Loaded ad state from storage', { isPro: parsed.isPro, adFreeUntil: parsed.adFreeUntil });
+  useEffect(() => {
+    (async () => {
+      // 1. Fast local restore from AsyncStorage for instant offline access
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.isPro) {
+            setIsPro(true);
+          }
+          setAdFreeUntil(
+            parsed.adFreeUntil && typeof parsed.adFreeUntil === 'number' && parsed.adFreeUntil > Date.now()
+              ? parsed.adFreeUntil
+              : null
+          );
+        }
+      } catch (e) {
+        console.warn('Failed to load ad state from storage', e);
+      }
 
-                    // --- TESTING REWARDED AD TIMER ---
-                    // To test the "Watch Ad" button repeatedly without waiting 30 minutes,
-                    // uncomment the lines below to force-clear the ad-free timer on app launch.
-                    // setAdFreeUntil(null);
-                    // try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ isPro: !!parsed.isPro, adFreeUntil: null })); } catch (e) { }
-                    // ---------------------------------
-                }
-            } catch (e) {
-                console.warn('Failed to load ad state', e);
-            }
-            // Also check server-side entitlement
-            await reloadFromServer();
-        })();
-    }, []);
+      // 2. Initialize RevenueCat and sync server entitlement
+      try {
+        await initPurchases();
+        await reloadFromServer();
+      } catch (e) {
+        console.warn('Failed to sync purchases on launch', e);
+      }
+    })();
 
-    useEffect(() => {
-        // persist
-        AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ isPro, adFreeUntil })).catch(() => { });
-    }, [isPro, adFreeUntil]);
+    // 3. Listen to live RevenueCat entitlement changes
+    const unsubscribe = addCustomerInfoUpdateListener((customerInfo) => {
+      const active = hasProEntitlement(customerInfo);
+      setIsPro(active);
+    });
 
-    const setPro = (v: boolean) => setIsPro(v);
-
-    const setAdFreeForHours = (hours: number) => {
-        const until = Date.now() + hours * 60 * 60 * 1000;
-        setAdFreeUntil(until);
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
     };
+  }, []);
 
-    const clearAdFree = () => setAdFreeUntil(null);
+  useEffect(() => {
+    // Persist changes locally
+    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ isPro, adFreeUntil })).catch(() => {});
+  }, [isPro, adFreeUntil]);
 
-    const showAds = !isPro && !(adFreeUntil && adFreeUntil > Date.now());
+  const setPro = (v: boolean) => setIsPro(v);
 
-    const reloadFromServer = async () => {
-        // RevenueCat removed
-    };
+  const setAdFreeForHours = (hours: number) => {
+    const until = Date.now() + hours * 60 * 60 * 1000;
+    setAdFreeUntil(until);
+  };
 
-    return (
-        <AdStateContext.Provider
-            value={{
-                isPro,
-                adFreeUntil,
-                setPro,
-                setAdFreeForHours,
-                clearAdFree,
-                showAds,
-                reloadFromServer,
-            }}
-        >
-            {children}
-        </AdStateContext.Provider>
-    );
+  const clearAdFree = () => setAdFreeUntil(null);
+
+  // If user is Pro or has active temporary ad-free reward, hide all ads
+  const showAds = !isPro && !(adFreeUntil && adFreeUntil > Date.now());
+
+  const reloadFromServer = async () => {
+    try {
+      const info = await getCustomerInfo();
+      if (info) {
+        const active = hasProEntitlement(info);
+        setIsPro(active);
+      }
+    } catch (e) {
+      console.warn('Failed to reload entitlement from server', e);
+    }
+  };
+
+  return (
+    <AdStateContext.Provider
+      value={{
+        isPro,
+        adFreeUntil,
+        setPro,
+        setAdFreeForHours,
+        clearAdFree,
+        showAds,
+        reloadFromServer,
+      }}
+    >
+      {children}
+    </AdStateContext.Provider>
+  );
 };
 
 export function useAdState() {
-    return useContext(AdStateContext);
+  return useContext(AdStateContext);
 }

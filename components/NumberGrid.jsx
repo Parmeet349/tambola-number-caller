@@ -1,35 +1,64 @@
-// components/NumberGrid.js
+// components/NumberGrid.jsx
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { useTheme } from '../utils/store/themeState';
 
-const cols = 10;
-const tileSize = Math.floor((Dimensions.get('window').width - 20) / cols);
+const COLS = 10;
+const PADDING = 16;
+const GAP = 5;
+const tileSize = Math.floor((Dimensions.get('window').width - PADDING * 2 - GAP * (COLS - 1)) / COLS);
 
-export default function NumberGrid({ calledNumbersSet, onTilePress }) {
-  const { currentTheme } = useTheme();
+export default function NumberGrid({ calledNumbersSet, latestNumber, onTilePress }) {
+  const { currentTheme: T } = useTheme();
+  const isDark = T.isDark;
   const numbers = Array.from({ length: 90 }, (_, i) => i + 1);
 
   return (
-    <View style={[styles.container, { backgroundColor: currentTheme.background }]}>
+    <View style={[styles.container, { backgroundColor: T.background }]}>
       {numbers.map((n) => {
-        const called = calledNumbersSet.has(n);
+        const isLatest = n === latestNumber;
+        const isCalled = calledNumbersSet && calledNumbersSet.has(n);
+
         return (
           <TouchableOpacity
             key={n}
             style={[
               styles.tile,
-              { backgroundColor: currentTheme.cardBg, borderColor: currentTheme.isDark ? '#2a1f49' : '#e0e0e0' },
-              called ? [styles.tileCalled, { backgroundColor: currentTheme.secondary, borderColor: currentTheme.primary }] : null
+              {
+                backgroundColor: isLatest
+                  ? (isDark ? '#ffffff' : '#111827')
+                  : isCalled
+                  ? T.primary
+                  : isDark
+                  ? (T.id === 'midnight' ? '#162030' : '#1c1038')
+                  : '#f2f4f7',
+                borderColor: isLatest
+                  ? (isDark ? '#ffffff' : '#111827')
+                  : isCalled
+                  ? T.primary
+                  : isDark
+                  ? (T.id === 'midnight' ? '#24324a' : '#2c1c4e')
+                  : 'transparent',
+              },
             ]}
             onPress={() => onTilePress && onTilePress(n)}
-            activeOpacity={0.8}
+            activeOpacity={0.75}
           >
-            <Text style={[
-              styles.tileText, 
-              { color: currentTheme.text },
-              called ? [styles.tileTextCalled, { color: currentTheme.primaryDark }] : null
-            ]}>
+            <Text
+              style={[
+                styles.tileText,
+                {
+                  color: isLatest
+                    ? (isDark ? '#111827' : '#ffffff')
+                    : isCalled
+                    ? '#ffffff'
+                    : isDark
+                    ? '#9ca3af'
+                    : '#4b5563',
+                  fontWeight: isLatest || isCalled ? '900' : '600',
+                },
+              ]}
+            >
               {n}
             </Text>
           </TouchableOpacity>
@@ -43,30 +72,20 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    padding: 8,
+    paddingHorizontal: PADDING,
+    paddingVertical: 12,
+    gap: GAP,
     justifyContent: 'center',
   },
   tile: {
     width: tileSize,
     height: tileSize,
-    margin: 2,
-    borderRadius: 6,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fafafa',
     borderWidth: 1,
-    borderColor: '#e0e0e0'
-  },
-  tileCalled: {
-    backgroundColor: '#9fd6a5',
-    borderColor: '#76b76a'
   },
   tileText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#222',
+    fontSize: 13,
   },
-  tileTextCalled: {
-    color: '#033306'
-  }
 });

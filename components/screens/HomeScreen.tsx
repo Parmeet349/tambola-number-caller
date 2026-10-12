@@ -1,106 +1,135 @@
 // components/screens/HomeScreen.tsx
-// import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from '@react-navigation/native';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useCallback, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert,
-  BackHandler,
+  Animated,
+  Modal,
   Platform,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
-  Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
-  Modal
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { RootStackParamList } from '../../app/(tabs)/index';
-import { logEvent } from '../../utils/analytics';
-import { useAdState } from '../../utils/store/adState';
-import { scheduleGameNightReminder, ReminderConfig } from '../../utils/notifications';
-import RewardedButton from '../RewardedButton';
-import { useTheme, THEMES } from '../../utils/store/themeState';
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { RootStackParamList } from "../../app/(tabs)/index";
+import { logEvent } from "../../utils/analytics";
+import { generateRoomCode } from "../../utils/partySync";
+import { useAdState } from "../../utils/store/adState";
+import { THEMES, useTheme } from "../../utils/store/themeState";
+import JoinPartyModal from "../JoinPartyModal";
+import ProModal from "../ProModal";
+import RewardedButton from "../RewardedButton";
+import { ThemeModal } from "../ThemeModal";
 
 interface CustomReminderConfig {
-  type: 'weekly' | 'once';
-  weekday: number; // 1 = Sunday, 7 = Saturday
-  hour: number; // 1-12
-  minute: number; // 0-59
-  period: 'AM' | 'PM';
-  onceDate: string; // YYYY-MM-DD
+  type: "weekly" | "once";
+  weekday: number;
+  hour: number;
+  minute: number;
+  period: "AM" | "PM";
+  onceDate: string;
 }
 
-function get24Hour(hour12: number, period: 'AM' | 'PM'): number {
+function get24Hour(hour12: number, period: "AM" | "PM"): number {
   let hr = hour12;
-  if (period === 'PM' && hr < 12) hr += 12;
-  if (period === 'AM' && hr === 12) hr = 0;
+  if (period === "PM" && hr < 12) hr += 12;
+  if (period === "AM" && hr === 12) hr = 0;
   return hr;
 }
 
-function getReminderDisplayText(config: CustomReminderConfig): string {
-  const timeStr = `${config.hour}:${String(config.minute).padStart(2, '0')} ${config.period}`;
-  if (config.type === 'weekly') {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const dayName = days[config.weekday - 1] || 'Saturday';
-    return `Weekly on ${dayName}s at ${timeStr}`;
-  } else {
-    try {
-      const [year, month, day] = config.onceDate.split('-').map(Number);
-      const dateObj = new Date(year, month - 1, day);
-      const dateFormatted = dateObj.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-      return `${dateFormatted} at ${timeStr}`;
-    } catch (e) {
-      return `${config.onceDate} at ${timeStr}`;
-    }
-  }
-}
+type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
-
-type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
+const VOICE_OPTIONS = [
+  { id: "fun_english", label: "Fun English" },
+  { id: "classic", label: "Classic UK" },
+  { id: "desi_bingo", label: "Desi Bingo" },
+  { id: "hindi_standard", label: "Hindi Standard" },
+] as const;
 
 export default function HomeScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(
+    insets.top,
+    Platform.OS === "android" ? StatusBar.currentHeight || 24 : 0,
+  );
   const { currentTheme, setTheme } = useTheme();
-  const [mode, setMode] = useState<'manual' | 'auto'>('manual');
-  const [speed, setSpeed] = useState<'slow' | 'medium' | 'fast'>('medium');
+  const [mode, setMode] = useState<"manual" | "auto">("manual");
+  const [speed, setSpeed] = useState<"slow" | "medium" | "fast">("medium");
   const [mute, setMute] = useState<boolean>(false);
-  const [hostName, setHostName] = useState<string>('');
+  const [hostName, setHostName] = useState<string>("");
   const [resumeCount, setResumeCount] = useState<number | null>(null);
+  const [voiceIndex, setVoiceIndex] = useState<number>(0);
+  const [voiceModalVisible, setVoiceModalVisible] = useState(false);
+  const [themeModalVisible, setThemeModalVisible] = useState(false);
+
   const [reminderEnabled, setReminderEnabled] = useState<boolean>(false);
   const [reminderConfig, setReminderConfig] = useState<CustomReminderConfig>({
-    type: 'weekly',
-    weekday: 7, // Saturday
-    hour: 7,
-    minute: 0,
-    period: 'PM',
-    onceDate: new Date().toISOString().split('T')[0],
-  });
-  const [tempConfig, setTempConfig] = useState<CustomReminderConfig>({
-    type: 'weekly',
+    type: "weekly",
     weekday: 7,
     hour: 7,
     minute: 0,
-    period: 'PM',
-    onceDate: new Date().toISOString().split('T')[0],
+    period: "PM",
+    onceDate: new Date().toISOString().split("T")[0],
   });
-  const [reminderModalVisible, setReminderModalVisible] = useState(false);
-  const { adFreeUntil } = useAdState();
+
+  const [proModalVisible, setProModalVisible] = useState(false);
+  const [joinPartyModalVisible, setJoinPartyModalVisible] = useState(false);
+  const { isPro, adFreeUntil } = useAdState();
+
+  // Animation
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const handleHostLiveParty = () => {
+    const code = generateRoomCode();
+    navigation.navigate("Game", {
+      initialMode: mode,
+      initialSpeed: speed,
+      initialMute: mute,
+      hostName,
+      partyRoomCode: code,
+      isPartyHost: true,
+      callerVoice: VOICE_OPTIONS[voiceIndex].id,
+      isNewGame: true,
+    });
+  };
 
   useFocusEffect(
     useCallback(() => {
       (async () => {
         try {
-          const name = await AsyncStorage.getItem('@tambola_host_name');
+          const name = await AsyncStorage.getItem("@tambola_host_name");
           if (name) setHostName(name);
 
-          const stateStr = await AsyncStorage.getItem('@tambola_state_v1');
+          const savedVoice = await AsyncStorage.getItem(
+            "@tambola_caller_voice",
+          );
+          if (savedVoice) {
+            const idx = VOICE_OPTIONS.findIndex((v) => v.id === savedVoice);
+            if (idx !== -1) setVoiceIndex(idx);
+          }
+
+          const stateStr = await AsyncStorage.getItem("@tambola_state_v1");
           if (stateStr) {
             const state = JSON.parse(stateStr);
-            if (state && state.called && state.called.length > 0) {
+            if (
+              state &&
+              state.called &&
+              state.called.length > 0 &&
+              state.called.length < 90
+            ) {
               setResumeCount(state.called.length);
             } else {
               setResumeCount(null);
@@ -109,803 +138,1068 @@ export default function HomeScreen({ navigation }: Props) {
             setResumeCount(null);
           }
 
-          const reminderStr = await AsyncStorage.getItem('@tambola_reminder');
-          if (reminderStr === 'true') setReminderEnabled(true);
-
-          const configStr = await AsyncStorage.getItem('@tambola_reminder_config');
-          if (configStr) {
-            setReminderConfig(JSON.parse(configStr));
-          }
-        } catch (e) { }
+          const reminderStr = await AsyncStorage.getItem("@tambola_reminder");
+          if (reminderStr === "true") setReminderEnabled(true);
+        } catch (e) {}
       })();
-    }, [])
+    }, []),
   );
-
-  const saveHostName = async (name: string) => {
-    setHostName(name);
-    try {
-      await AsyncStorage.setItem('@tambola_host_name', name);
-    } catch (e) { }
-  };
-
-  const handleReminderToggle = async (val: boolean) => {
-    setReminderEnabled(val);
-    try {
-      await AsyncStorage.setItem('@tambola_reminder', val ? 'true' : 'false');
-      const hr24 = get24Hour(reminderConfig.hour, reminderConfig.period);
-      const reminderPayload: ReminderConfig = {
-        enabled: val,
-        type: reminderConfig.type,
-        weekday: reminderConfig.weekday,
-        hour: hr24,
-        minute: reminderConfig.minute,
-        onceDate: reminderConfig.onceDate,
-      };
-      const success = await scheduleGameNightReminder(reminderPayload);
-      if (val && !success) {
-        setReminderEnabled(false);
-        await AsyncStorage.setItem('@tambola_reminder', 'false');
-        Alert.alert('Reminder Setup Failed', 'Please ensure you select a future date/time, and enable notifications in your device settings.');
-      }
-    } catch (e) {}
-  };
-
-  const saveReminderConfig = async (newConfig: CustomReminderConfig) => {
-    try {
-      await AsyncStorage.setItem('@tambola_reminder_config', JSON.stringify(newConfig));
-      setReminderConfig(newConfig);
-      
-      setReminderEnabled(true);
-      await AsyncStorage.setItem('@tambola_reminder', 'true');
-
-      const hr24 = get24Hour(newConfig.hour, newConfig.period);
-      const reminderPayload: ReminderConfig = {
-        enabled: true,
-        type: newConfig.type,
-        weekday: newConfig.weekday,
-        hour: hr24,
-        minute: newConfig.minute,
-        onceDate: newConfig.onceDate,
-      };
-      const success = await scheduleGameNightReminder(reminderPayload);
-
-      if (!success) {
-        setReminderEnabled(false);
-        await AsyncStorage.setItem('@tambola_reminder', 'false');
-        Alert.alert('Reminder Setup Failed', 'Please ensure you select a future date and time, and check your notification settings.');
-      } else {
-        Alert.alert('Reminder Set', 'Your custom Tambola reminder has been successfully scheduled!');
-      }
-    } catch (e) {
-      console.warn('Failed to save reminder config', e);
-    }
-  };
 
   const handleStart = async () => {
     try {
-      await AsyncStorage.removeItem('@tambola_state_v1');
-    } catch (e) { }
-    logEvent('game_start', { mode, speed, mute });
-    navigation.navigate('Game', { initialMode: mode, initialSpeed: speed, initialMute: mute, hostName } as any);
+      await AsyncStorage.removeItem("@tambola_state_v1");
+    } catch (e) {}
+    logEvent("game_start", { mode, speed, mute });
+    navigation.navigate("Game", {
+      initialMode: mode,
+      initialSpeed: speed,
+      initialMute: mute,
+      hostName,
+      callerVoice: VOICE_OPTIONS[voiceIndex].id,
+      isNewGame: true,
+    });
   };
 
   const handleResume = () => {
-    logEvent('game_resume', { resumeCount });
-    navigation.navigate('Game', { hostName } as any);
+    logEvent("game_resume", { resumeCount });
+    navigation.navigate("Game", {
+      hostName,
+      callerVoice: VOICE_OPTIONS[voiceIndex].id,
+      isResume: true,
+    });
   };
 
-  const confirmExit = useCallback(() => {
-    Alert.alert('Hold on!', 'Are you sure you want to exit?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'YES',
-        onPress: () => {
-          if (Platform.OS === 'android') {
-            BackHandler.exitApp();
-          }
-        },
-      },
-    ]);
-  }, []);
-
-  const onHardwareBackPress = useCallback(() => {
-    confirmExit();
-    return true; // VERY IMPORTANT
-  }, [confirmExit]);
-
-  useFocusEffect(
-    useCallback(() => {
-      if (Platform.OS === 'android') {
-        const backHandler = BackHandler.addEventListener(
-          'hardwareBackPress',
-          onHardwareBackPress
-        );
-        return () => backHandler.remove();
-      }
-    }, [onHardwareBackPress])
-  );
-  const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  
-  const datesList = [];
-  for (let i = 0; i < 14; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() + i);
-    const year = d.getFullYear();
-    const monthIndex = d.getMonth();
-    const dateNum = d.getDate();
-    
-    const dateStr = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(dateNum).padStart(2, '0')}`;
-    const dayNum = dateNum;
-    const weekday = weekdayNames[d.getDay()];
-    const month = monthNames[monthIndex];
-    datesList.push({ dateStr, dayNum, weekday, month });
-  }
-
-  const WEEKDAYS = [
-    { id: 1, label: 'Sun' },
-    { id: 2, label: 'Mon' },
-    { id: 3, label: 'Tue' },
-    { id: 4, label: 'Wed' },
-    { id: 5, label: 'Thu' },
-    { id: 6, label: 'Fri' },
-    { id: 7, label: 'Sat' },
-  ];
+  const T = currentTheme;
+  const isDark = T.isDark;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: currentTheme.background }]}>
-      <StatusBar barStyle={currentTheme.isDark ? 'light-content' : 'dark-content'} backgroundColor={currentTheme.background} />
+    <View style={[styles.safe, { backgroundColor: T.background }]}>
+      <StatusBar
+        barStyle={isDark ? "light-content" : "dark-content"}
+        translucent
+        backgroundColor="transparent"
+      />
 
-      {/* Enhanced Header with Back/Exit Button */}
-      <View style={[styles.topBar, { backgroundColor: currentTheme.background }]}>
-        {Platform.OS === 'android' && (
-          <TouchableOpacity style={styles.headerBtn} onPress={confirmExit}>
-            <Text style={[styles.exitLink, { color: currentTheme.primary }]}>✕ Exit</Text>
+      {/* ── HEADER ── */}
+      <View
+        style={[
+          styles.header,
+          { backgroundColor: T.background, paddingTop: topInset + 8 },
+        ]}
+      >
+        <View style={styles.headerBrand}>
+          <View
+            style={[styles.headerIconBadge, { backgroundColor: T.primary }]}
+          >
+            <Ionicons name="dice" size={17} color="#ffffff" />
+          </View>
+          <Text style={[styles.headerLogo, { color: T.text }]}>Tambola</Text>
+        </View>
+
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={[
+              styles.goProPill,
+              isPro
+                ? {
+                    backgroundColor: isDark
+                      ? "rgba(16, 185, 129, 0.15)"
+                      : "#d1fae5",
+                    borderColor: isDark
+                      ? "rgba(16, 185, 129, 0.35)"
+                      : "#a7f3d0",
+                  }
+                : {
+                    backgroundColor: isDark
+                      ? "rgba(245, 158, 11, 0.15)"
+                      : "#fef3c7",
+                    borderColor: isDark
+                      ? "rgba(245, 158, 11, 0.35)"
+                      : "#fde68a",
+                  },
+            ]}
+            onPress={() => setProModalVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={isPro ? "sparkles" : "star"}
+              size={13}
+              color={isPro ? "#10b981" : isDark ? "#fbbf24" : "#d97706"}
+            />
+            <Text
+              style={[
+                styles.goProPillText,
+                { color: isPro ? "#10b981" : isDark ? "#fbbf24" : "#b45309" },
+              ]}
+            >
+              {isPro ? "PRO ACTIVE" : "GO PRO"}
+            </Text>
           </TouchableOpacity>
-        )}
-        <TouchableOpacity style={styles.headerBtn} onPress={() => navigation.navigate('About')}>
-          <Text style={[styles.aboutLink, { color: currentTheme.primary }]}>About</Text>
-        </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.infoBtn,
+              {
+                backgroundColor: isDark
+                  ? "rgba(255, 255, 255, 0.08)"
+                  : "rgba(0, 0, 0, 0.04)",
+                borderColor: isDark
+                  ? "rgba(255, 255, 255, 0.12)"
+                  : "rgba(0, 0, 0, 0.08)",
+              },
+            ]}
+            onPress={() => navigation.navigate("About")}
+            activeOpacity={0.75}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons
+              name="information-circle-outline"
+              size={20}
+              color={T.text}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <Text style={[styles.title, { color: currentTheme.text }]}>
-          {hostName.trim() ? `Welcome back, ${hostName}! 🎉` : 'Welcome to Tambola'}
-        </Text>
-
-        <View style={styles.hostInputContainer}>
-          <Text style={[styles.hostInputLabel, { color: currentTheme.textLight }]}>Host Name</Text>
-          <TextInput
-            style={[styles.hostInput, { backgroundColor: currentTheme.cardBg, color: currentTheme.text, borderColor: currentTheme.isDark ? '#32284c' : '#f0f0f0' }]}
-            placeholder="Enter your name (e.g., Uncle Raj)"
-            placeholderTextColor={currentTheme.isDark ? '#6f648e' : '#888'}
-            value={hostName}
-            onChangeText={saveHostName}
-          />
-        </View>
-
-        {resumeCount !== null && resumeCount > 0 && (
-          <View style={[styles.card, styles.resumeCard, currentTheme.isDark && { backgroundColor: '#1e3822', borderColor: '#2e7d32' }]}>
-            <Text style={[styles.resumeTitle, currentTheme.isDark && { color: '#81c784' }]}>🎲 Game in Progress</Text>
-            <Text style={[styles.resumeText, currentTheme.isDark && { color: '#66bb6a' }]}>{resumeCount} of 90 numbers called</Text>
-            <View style={styles.resumeBtnRow}>
-               <TouchableOpacity style={[styles.resumeBtn, currentTheme.isDark && { backgroundColor: '#2e7d32' }]} onPress={handleResume}>
-                 <Text style={styles.resumeBtnText}>Resume Game</Text>
-               </TouchableOpacity>
-            </View>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View style={{ opacity: fadeAnim }}>
+          {/* ── TITLE SECTION ── */}
+          <View style={styles.titleSection}>
+            <Text style={[styles.titleGreeting, { color: T.textLight }]}>
+              {hostName.trim()
+                ? `Welcome back, ${hostName}! 👋`
+                : "Ready for game night?"}
+            </Text>
+            <Text style={[styles.titleMain, { color: T.text }]}>
+              Let's Play
+            </Text>
           </View>
-        )}
 
-        {/* Step 1 */}
-        <View style={[styles.card, { backgroundColor: currentTheme.cardBg, borderColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-          <Text style={[styles.sectionTitle, { color: currentTheme.text }]}>Step 1 — Choose Mode</Text>
-          <View style={styles.modeRow}>
+          {/* ── RESUME BANNER (if active game exists) ── */}
+          {resumeCount !== null && resumeCount > 0 && (
             <TouchableOpacity
               style={[
-                styles.option,
-                { backgroundColor: currentTheme.isDark ? '#1b1433' : '#f9f9f9', borderColor: 'transparent' },
-                mode === 'manual' && { backgroundColor: currentTheme.secondary, borderColor: currentTheme.primary }
+                styles.resumeCard,
+                {
+                  backgroundColor: T.cardBg,
+                  borderColor: isDark ? "#2a1f49" : "#f0f1f4",
+                },
               ]}
-              onPress={() => setMode('manual')}
+              onPress={handleResume}
+              activeOpacity={0.85}
             >
-              <Text style={[
-                styles.optionText,
-                { color: currentTheme.textLight },
-                mode === 'manual' && { color: currentTheme.primary }
-              ]}>Manual</Text>
-              <Text style={[styles.optionSub, { color: currentTheme.isDark ? '#7a6e9a' : '#888' }]}>Tap to call numbers yourself</Text>
-            </TouchableOpacity>
+              <View style={styles.resumeLeft}>
+                <View
+                  style={[
+                    styles.resumeProgressCircle,
+                    { borderColor: T.primary },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.resumeInnerDot,
+                      { backgroundColor: T.primary },
+                    ]}
+                  />
+                </View>
+                <View>
+                  <Text style={[styles.resumeTitle, { color: T.text }]}>
+                    Game in progress
+                  </Text>
+                  <Text style={[styles.resumeSub, { color: T.textLight }]}>
+                    {resumeCount} of 90 numbers called
+                  </Text>
+                </View>
+              </View>
 
-            <TouchableOpacity
-              style={[
-                styles.option,
-                { backgroundColor: currentTheme.isDark ? '#1b1433' : '#f9f9f9', borderColor: 'transparent' },
-                mode === 'auto' && { backgroundColor: currentTheme.secondary, borderColor: currentTheme.primary }
-              ]}
-              onPress={() => setMode('auto')}
-            >
-              <Text style={[
-                styles.optionText,
-                { color: currentTheme.textLight },
-                mode === 'auto' && { color: currentTheme.primary }
-              ]}>Automatic</Text>
-              <Text style={[styles.optionSub, { color: currentTheme.isDark ? '#7a6e9a' : '#888' }]}>Auto-play with chosen speed</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Step 2 */}
-        <View style={[styles.card, { backgroundColor: currentTheme.cardBg, borderColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-          <Text style={[styles.sectionTitle, { color: currentTheme.text }]}>Step 2 — Speed (Auto only)</Text>
-          <View style={styles.speedRow}>
-            {(['slow', 'medium', 'fast'] as const).map((s) => (
-              <TouchableOpacity
-                key={s}
-                style={[
-                  styles.smallOption,
-                  { backgroundColor: currentTheme.isDark ? '#1b1433' : '#f9f9f9', borderColor: currentTheme.isDark ? '#2a1f49' : '#eee' },
-                  speed === s && { backgroundColor: currentTheme.secondary, borderColor: currentTheme.primary }
-                ]}
-                onPress={() => setSpeed(s)}
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
               >
-                <Text style={[
-                  styles.smallOptionText,
-                  { color: currentTheme.textLight },
-                  speed === s && { color: currentTheme.primary }
-                ]}>
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                <Text style={[styles.resumeCtaText, { color: T.primary }]}>
+                  Resume
                 </Text>
+                <Ionicons name="chevron-forward" size={16} color={T.primary} />
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* ── NEW GAME CARD ── */}
+          <View style={[styles.newGameCard, { backgroundColor: T.primary }]}>
+            {/* Watermark 90 */}
+            <Text style={styles.watermark}>90</Text>
+
+            <Text style={styles.newGameTag}>NEW GAME</Text>
+
+            {/* Mode Switcher */}
+            <View style={styles.modeTabsWrap}>
+              <TouchableOpacity
+                style={[
+                  styles.modeTab,
+                  mode === "manual" && styles.modeTabActive,
+                ]}
+                onPress={() => setMode("manual")}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    mode === "manual"
+                      ? { color: T.primary }
+                      : styles.modeTabInactiveText,
+                  ]}
+                >
+                  Manual
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.modeTab,
+                  mode === "auto" && styles.modeTabActive,
+                ]}
+                onPress={() => setMode("auto")}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    mode === "auto"
+                      ? { color: T.primary }
+                      : styles.modeTabInactiveText,
+                  ]}
+                >
+                  Auto
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Instruction description */}
+            <Text style={styles.modeDescription}>
+              {mode === "manual"
+                ? "Tap to call each number at your own pace."
+                : "Numbers will be called automatically on a timer."}
+            </Text>
+
+            {/* Speed Pills */}
+            <View style={styles.speedPillsRow}>
+              {(["slow", "medium", "fast"] as const).map((s) => {
+                const label =
+                  s === "slow" ? "Relaxed" : s === "medium" ? "Normal" : "Fast";
+                const isSelected = speed === s;
+                return (
+                  <TouchableOpacity
+                    key={s}
+                    style={[
+                      styles.speedPill,
+                      isSelected && styles.speedPillActive,
+                    ]}
+                    onPress={() => setSpeed(s)}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.speedPillText,
+                        isSelected && { fontWeight: "900" },
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Start Game Button */}
+            <TouchableOpacity
+              style={styles.startGameBtn}
+              onPress={handleStart}
+              activeOpacity={0.85}
+            >
+              <Ionicons
+                name="play"
+                size={16}
+                color={T.primary}
+                style={{ marginRight: 6 }}
+              />
+              <Text style={[styles.startGameBtnText, { color: T.primary }]}>
+                Start game
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ── HOST A GAME / JOIN A GAME GRID ── */}
+          <View style={styles.partyGridRow}>
+            {/* Host Card */}
+            <TouchableOpacity
+              style={[
+                styles.partyCard,
+                {
+                  backgroundColor: T.cardBg,
+                  borderColor: isDark
+                    ? T.id === "midnight"
+                      ? "#222f44"
+                      : "#2a1f49"
+                    : "#f0f1f4",
+                },
+              ]}
+              onPress={handleHostLiveParty}
+              activeOpacity={0.8}
+            >
+              <View
+                style={[
+                  styles.partyIconCircle,
+                  { backgroundColor: T.secondary },
+                ]}
+              >
+                <Ionicons name="people" size={20} color={T.primary} />
+              </View>
+              <Text style={[styles.partyCardTitle, { color: T.text }]}>
+                Host a game
+              </Text>
+              <Text style={[styles.partyCardSub, { color: T.textLight }]}>
+                Share a room code
+              </Text>
+            </TouchableOpacity>
+
+            {/* Join Card */}
+            <TouchableOpacity
+              style={[
+                styles.partyCard,
+                {
+                  backgroundColor: T.cardBg,
+                  borderColor: isDark
+                    ? T.id === "midnight"
+                      ? "#222f44"
+                      : "#2a1f49"
+                    : "#f0f1f4",
+                },
+              ]}
+              onPress={() => setJoinPartyModalVisible(true)}
+              activeOpacity={0.8}
+            >
+              <View
+                style={[
+                  styles.partyIconCircle,
+                  { backgroundColor: T.secondary },
+                ]}
+              >
+                <Ionicons name="grid-outline" size={18} color={T.primary} />
+              </View>
+              <Text style={[styles.partyCardTitle, { color: T.text }]}>
+                Join a game
+              </Text>
+              <Text style={[styles.partyCardSub, { color: T.textLight }]}>
+                Enter a room code
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ── PREFERENCES CARD (VOICE & THEME) ── */}
+          <View
+            style={[
+              styles.settingsCard,
+              {
+                backgroundColor: T.cardBg,
+                borderColor: isDark
+                  ? T.id === "midnight"
+                    ? "#222f44"
+                    : "#2a1f49"
+                  : "#f0f1f4",
+              },
+            ]}
+          >
+            {/* Voice Row */}
+            <TouchableOpacity
+              style={styles.settingRowItem}
+              onPress={() => setVoiceModalVisible(true)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.settingRowLeft}>
+                <View
+                  style={[
+                    styles.settingIconWrap,
+                    { backgroundColor: T.secondary },
+                  ]}
+                >
+                  <Ionicons name="mic-outline" size={17} color={T.primary} />
+                </View>
+                <Text style={[styles.settingItemLabel, { color: T.text }]}>
+                  Caller Voice
+                </Text>
+              </View>
+              <View style={styles.settingRowRight}>
+                <Text style={[styles.settingItemValue, { color: T.textLight }]}>
+                  {VOICE_OPTIONS[voiceIndex].label}
+                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={T.textLight}
+                />
+              </View>
+            </TouchableOpacity>
+
+            <View
+              style={[
+                styles.settingDivider,
+                {
+                  backgroundColor: isDark
+                    ? T.id === "midnight"
+                      ? "#1e293b"
+                      : "#2a1f49"
+                    : "#f3f4f6",
+                },
+              ]}
+            />
+
+            {/* Theme Row Header */}
+            <TouchableOpacity
+              style={styles.settingRowItem}
+              onPress={() => setThemeModalVisible(true)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.settingRowLeft}>
+                <View
+                  style={[
+                    styles.settingIconWrap,
+                    { backgroundColor: T.secondary },
+                  ]}
+                >
+                  <Ionicons
+                    name="color-palette-outline"
+                    size={17}
+                    color={T.primary}
+                  />
+                </View>
+                <Text style={[styles.settingItemLabel, { color: T.text }]}>
+                  App Theme
+                </Text>
+              </View>
+              <View style={styles.settingRowRight}>
+                <View
+                  style={[
+                    styles.themeActiveTag,
+                    {
+                      backgroundColor: isDark
+                        ? T.id === "midnight"
+                          ? "#1e293b"
+                          : "#2a124a"
+                        : T.secondary,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.themePillDot,
+                      { backgroundColor: T.primary },
+                    ]}
+                  />
+                  <Text
+                    style={[styles.themeActiveTagName, { color: T.primary }]}
+                  >
+                    {T.name}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={T.textLight}
+                />
+              </View>
+            </TouchableOpacity>
+
+            {/* Quick-Select Theme Horizontal Carousel */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.themePillsContainer}
+            >
+              {Object.values(THEMES).map((th) => {
+                const isSelected = T.id === th.id;
+                return (
+                  <TouchableOpacity
+                    key={th.id}
+                    onPress={() => setTheme(th.id)}
+                    style={[
+                      styles.themePill,
+                      {
+                        backgroundColor: isSelected
+                          ? isDark
+                            ? T.id === "midnight"
+                              ? "#1e293b"
+                              : "#2a124a"
+                            : T.secondary
+                          : isDark
+                            ? T.id === "midnight"
+                              ? "#0b0f19"
+                              : "#0a0518"
+                            : "#f9f9fb",
+                        borderColor: isSelected
+                          ? th.primary
+                          : isDark
+                            ? T.id === "midnight"
+                              ? "#222f44"
+                              : "#2a1f49"
+                            : "#e5e7eb",
+                        borderWidth: isSelected ? 2 : 1,
+                      },
+                    ]}
+                    activeOpacity={0.75}
+                  >
+                    <View
+                      style={[
+                        styles.themePillDot,
+                        { backgroundColor: th.primary },
+                      ]}
+                    >
+                      {th.isDark && (
+                        <Ionicons name="moon" size={7} color="#fff" />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.themePillName,
+                        {
+                          color: isSelected
+                            ? isDark
+                              ? "#fff"
+                              : th.primaryDark
+                            : T.text,
+                          fontWeight: isSelected ? "800" : "600",
+                        },
+                      ]}
+                    >
+                      {th.name}
+                    </Text>
+                    {isSelected && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={14}
+                        color={th.primary}
+                      />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* ── 30-MIN AD-FREE REWARDED CTA ── */}
+          {!isPro && (
+            <View style={styles.adFreeSection}>
+              {adFreeUntil && adFreeUntil > Date.now() ? (
+                <View
+                  style={[
+                    styles.adFreeActiveCard,
+                    {
+                      backgroundColor: isDark
+                        ? "rgba(16, 185, 129, 0.15)"
+                        : "#ecfdf5",
+                      borderColor: isDark
+                        ? "rgba(16, 185, 129, 0.35)"
+                        : "#a7f3d0",
+                    },
+                  ]}
+                >
+                  <Ionicons name="sparkles" size={18} color="#10b981" />
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[styles.adFreeActiveTitle, { color: "#10b981" }]}
+                    >
+                      30-Min Ad-Free Active
+                    </Text>
+                    <Text
+                      style={[
+                        styles.adFreeActiveSub,
+                        { color: isDark ? "#a7f3d0" : "#047857" },
+                      ]}
+                    >
+                      Enjoying ad-free play until{" "}
+                      {new Date(adFreeUntil).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <RewardedButton />
+              )}
+            </View>
+          )}
+
+          <View style={{ height: 40 }} />
+        </Animated.View>
+      </ScrollView>
+
+      {/* Voice Selection Modal */}
+      <Modal
+        visible={voiceModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setVoiceModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setVoiceModalVisible(false)}
+        >
+          <View style={[styles.modalBox, { backgroundColor: T.cardBg }]}>
+            <Text style={[styles.modalTitle, { color: T.text }]}>
+              Select Caller Voice
+            </Text>
+            {VOICE_OPTIONS.map((opt, i) => (
+              <TouchableOpacity
+                key={opt.id}
+                style={[
+                  styles.modalItem,
+                  voiceIndex === i && { backgroundColor: T.secondary },
+                ]}
+                onPress={() => {
+                  setVoiceIndex(i);
+                  setVoiceModalVisible(false);
+                  AsyncStorage.setItem("@tambola_caller_voice", opt.id).catch(
+                    () => {},
+                  );
+                }}
+              >
+                <Text
+                  style={[
+                    styles.modalItemText,
+                    { color: voiceIndex === i ? T.primary : T.text },
+                  ]}
+                >
+                  {opt.label}
+                </Text>
+                {voiceIndex === i && (
+                  <Ionicons name="checkmark" size={18} color={T.primary} />
+                )}
               </TouchableOpacity>
             ))}
           </View>
-        </View>
-
-        {/* Step 3 — Choose Theme */}
-        <View style={[styles.card, { backgroundColor: currentTheme.cardBg, borderColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-          <Text style={[styles.sectionTitle, { color: currentTheme.text }]}>Step 3 — Choose Theme 🎨</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
-            {Object.values(THEMES).map((theme) => {
-              const isSelected = currentTheme.id === theme.id;
-              return (
-                <TouchableOpacity
-                  key={theme.id}
-                  style={[
-                    styles.themePill,
-                    {
-                      backgroundColor: theme.background,
-                      borderColor: isSelected ? theme.primary : (currentTheme.isDark ? '#2a1f49' : '#e0e0e0'),
-                      borderWidth: isSelected ? 2 : 1,
-                    }
-                  ]}
-                  onPress={() => setTheme(theme.id)}
-                >
-                  <Text style={[styles.themePillText, { color: theme.text, fontWeight: isSelected ? '800' : '500' }]}>
-                    {theme.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Options & Information */}
-        <View style={[styles.card, { backgroundColor: currentTheme.cardBg, borderColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-          <Text style={[styles.sectionTitle, { color: currentTheme.text }]}>Options</Text>
-          <View style={styles.row}>
-            <Text style={[styles.rowLabel, { color: currentTheme.text }]}>Mute TTS</Text>
-            <Switch
-              value={mute}
-              onValueChange={setMute}
-              trackColor={{ false: currentTheme.isDark ? "#3c2a63" : "#ddd", true: currentTheme.primary }}
-              thumbColor={mute ? currentTheme.accent : "#f4f3f4"}
-            />
-          </View>
-
-          <View style={[styles.row, { marginTop: 12, alignItems: 'center' }]}>
-            <View style={{ flex: 1, paddingRight: 8 }}>
-              <Text style={[styles.rowLabel, { color: currentTheme.text }]}>Game Night Reminder</Text>
-              <TouchableOpacity 
-                onPress={() => {
-                  setTempConfig(reminderConfig);
-                  setReminderModalVisible(true);
-                }}
-                style={{ marginTop: 4 }}
-              >
-                <Text style={{ color: reminderEnabled ? currentTheme.primary : currentTheme.textLight, fontSize: 13, fontWeight: '600', textDecorationLine: 'underline' }}>
-                  {getReminderDisplayText(reminderConfig)}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            <Switch
-              value={reminderEnabled}
-              onValueChange={handleReminderToggle}
-              trackColor={{ false: currentTheme.isDark ? "#3c2a63" : "#ddd", true: currentTheme.primary }}
-              thumbColor={reminderEnabled ? currentTheme.accent : "#f4f3f4"}
-            />
-          </View>
-
-          <View style={[styles.noteWrap, { borderTopColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-            <Text style={[styles.noteTitle, { color: currentTheme.text }]}>What happens next</Text>
-            <Text style={[styles.noteText, { color: currentTheme.textLight }]}>
-              {"You'll be taken to the Game screen. Use the History button in the game to view all called numbers as a modal — your current game will remain unchanged."}
-            </Text>
-          </View>
-        </View>
-
-        {/* Ad Status Area */}
-        <View style={styles.adContainer}>
-          {adFreeUntil && adFreeUntil > Date.now() ? (
-            <View style={[styles.adBadge, { backgroundColor: currentTheme.secondary }]}>
-              <Text style={[styles.adBadgeText, { color: currentTheme.primary }]}>
-                Ad-free until {new Date(adFreeUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-            </View>
-          ) : (
-            <RewardedButton />
-          )}
-        </View>
-
-        <View style={{ height: 100 }} />
-      </ScrollView>
-
-      {/* Sticky footer */}
-      <View style={[styles.footer, { backgroundColor: currentTheme.isDark ? 'rgba(9,5,20,0.95)' : 'rgba(255,255,255,0.9)', borderTopColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0', borderTopWidth: 1 }]}>
-        <TouchableOpacity style={[styles.startBtn, { backgroundColor: currentTheme.primary }]} onPress={handleStart} activeOpacity={0.8}>
-          <Text style={styles.startBtnText}>START GAME</Text>
         </TouchableOpacity>
-      </View>
-
-      <Modal
-        visible={reminderModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setReminderModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: currentTheme.isDark ? '#1b1433' : '#ffffff', borderColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0', borderWidth: 1 }]}>
-            
-            {/* Header */}
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: currentTheme.text }]}>⏰ Custom Reminder</Text>
-              <TouchableOpacity onPress={() => setReminderModalVisible(false)} style={styles.modalCloseBtn}>
-                <Text style={[styles.modalCloseBtnText, { color: currentTheme.textLight }]}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Scrollable Modal Content */}
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
-              
-              {/* Reminder Type Selection */}
-              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Reminder Type</Text>
-              <View style={[styles.typeToggleRow, { backgroundColor: currentTheme.isDark ? '#120b24' : '#f5f5f5' }]}>
-                <TouchableOpacity
-                  onPress={() => setTempConfig(prev => ({ ...prev, type: 'weekly' }))}
-                  style={[
-                    styles.typeToggleBtn,
-                    tempConfig.type === 'weekly' && { backgroundColor: currentTheme.primary }
-                  ]}
-                >
-                  <Text style={[styles.typeToggleText, { color: tempConfig.type === 'weekly' ? '#fff' : currentTheme.textLight }]}>
-                    Weekly Repeating
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => setTempConfig(prev => ({ ...prev, type: 'once' }))}
-                  style={[
-                    styles.typeToggleBtn,
-                    tempConfig.type === 'once' && { backgroundColor: currentTheme.primary }
-                  ]}
-                >
-                  <Text style={[styles.typeToggleText, { color: tempConfig.type === 'once' ? '#fff' : currentTheme.textLight }]}>
-                    One-Time Event
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Weekly Settings */}
-              {tempConfig.type === 'weekly' ? (
-                <>
-                  <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Day</Text>
-                  <View style={styles.weekdayContainer}>
-                    {WEEKDAYS.map((day) => {
-                      const isSelected = tempConfig.weekday === day.id;
-                      return (
-                        <TouchableOpacity
-                          key={day.id}
-                          onPress={() => setTempConfig(prev => ({ ...prev, weekday: day.id }))}
-                          style={[
-                            styles.weekdayCircle,
-                            {
-                              borderColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#3c2a63' : '#ddd'),
-                              backgroundColor: isSelected ? currentTheme.primary : 'transparent',
-                            }
-                          ]}
-                        >
-                          <Text style={[styles.weekdayText, { color: isSelected ? '#fff' : currentTheme.text }]}>
-                            {day.label.slice(0, 1)}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </>
-              ) : (
-                <>
-                  {/* One-Time Date Picker */}
-                  <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Date</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 4 }}>
-                    {datesList.map((item) => {
-                      const isSelected = tempConfig.onceDate === item.dateStr;
-                      return (
-                        <TouchableOpacity
-                          key={item.dateStr}
-                          onPress={() => setTempConfig(prev => ({ ...prev, onceDate: item.dateStr }))}
-                          style={[
-                            styles.dateCard,
-                            {
-                              borderColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#3c2a63' : '#ddd'),
-                              backgroundColor: isSelected ? currentTheme.primary : 'transparent',
-                            }
-                          ]}
-                        >
-                          <Text style={[styles.dateCardWeekday, { color: isSelected ? '#fff' : currentTheme.textLight }]}>
-                            {item.weekday}
-                          </Text>
-                          <Text style={[styles.dateCardDay, { color: isSelected ? '#fff' : currentTheme.text, fontWeight: '800' }]}>
-                            {item.dayNum}
-                          </Text>
-                          <Text style={[styles.dateCardMonth, { color: isSelected ? '#fff' : currentTheme.textLight }]}>
-                            {item.month}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </>
-              )}
-
-              {/* Hour Selection */}
-              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Hour</Text>
-              <View style={styles.timeGrid}>
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((hr) => {
-                  const isSelected = tempConfig.hour === hr;
-                  return (
-                    <TouchableOpacity
-                      key={hr}
-                      onPress={() => setTempConfig(prev => ({ ...prev, hour: hr }))}
-                      style={[
-                        styles.timeGridButton,
-                        {
-                          backgroundColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#251b40' : '#f5f5f5'),
-                        }
-                      ]}
-                    >
-                      <Text style={{ color: isSelected ? '#fff' : currentTheme.text, fontWeight: '600' }}>
-                        {hr}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Minute Selection */}
-              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Select Minute</Text>
-              <View style={styles.timeGrid}>
-                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((min) => {
-                  const isSelected = tempConfig.minute === min;
-                  return (
-                    <TouchableOpacity
-                      key={min}
-                      onPress={() => setTempConfig(prev => ({ ...prev, minute: min }))}
-                      style={[
-                        styles.timeGridButton,
-                        {
-                          backgroundColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#251b40' : '#f5f5f5'),
-                        }
-                      ]}
-                    >
-                      <Text style={{ color: isSelected ? '#fff' : currentTheme.text, fontWeight: '600' }}>
-                        {String(min).padStart(2, '0')}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Period selection */}
-              <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>AM / PM</Text>
-              <View style={styles.periodRow}>
-                {['AM', 'PM'].map((p) => {
-                  const isSelected = tempConfig.period === p;
-                  return (
-                    <TouchableOpacity
-                      key={p}
-                      onPress={() => setTempConfig(prev => ({ ...prev, period: p as 'AM' | 'PM' }))}
-                      style={[
-                        styles.periodButton,
-                        {
-                          backgroundColor: isSelected ? currentTheme.primary : (currentTheme.isDark ? '#251b40' : '#f5f5f5'),
-                          flex: 1,
-                          marginHorizontal: 4,
-                        }
-                      ]}
-                    >
-                      <Text style={{ color: isSelected ? '#fff' : currentTheme.text, fontWeight: 'bold' }}>
-                        {p}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-            </ScrollView>
-
-            {/* Footer Buttons */}
-            <View style={[styles.modalFooter, { borderTopColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-              <TouchableOpacity
-                onPress={() => setReminderModalVisible(false)}
-                style={[styles.modalFooterBtn, { backgroundColor: currentTheme.isDark ? '#251b40' : '#f5f5f5' }]}
-              >
-                <Text style={[styles.modalFooterBtnText, { color: currentTheme.text }]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  setReminderModalVisible(false);
-                  saveReminderConfig(tempConfig);
-                }}
-                style={[styles.modalFooterBtn, { backgroundColor: currentTheme.primary }]}
-              >
-                <Text style={[styles.modalFooterBtnText, { color: '#fff' }]}>Save</Text>
-              </TouchableOpacity>
-            </View>
-
-          </View>
-        </View>
       </Modal>
-    </SafeAreaView>
+
+      {/* Pro Modal */}
+      <ProModal
+        visible={proModalVisible}
+        onClose={() => setProModalVisible(false)}
+      />
+
+      {/* Join Party Modal */}
+      <JoinPartyModal
+        visible={joinPartyModalVisible}
+        onClose={() => setJoinPartyModalVisible(false)}
+      />
+
+      {/* Theme Selection Modal */}
+      <ThemeModal
+        visible={themeModalVisible}
+        onClose={() => setThemeModalVisible(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
-  topBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: '#fff',
+  safe: { flex: 1 },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingBottom: 10,
   },
-  headerBtn: { padding: 8 },
-  exitLink: { color: '#d32f2f', fontWeight: 'bold', fontSize: 16 },
-  aboutLink: { color: '#1976d2', fontWeight: 'bold', fontSize: 16 },
-  container: { paddingHorizontal: 20, paddingTop: 10 },
-  title: {
-    fontSize: 28,
-    fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 20,
-    color: '#111',
+  headerBrand: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
   },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-    // Soft shadow
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
+  headerIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
     elevation: 2,
   },
-  hostInputContainer: { marginBottom: 16 },
-  hostInputLabel: { fontSize: 14, fontWeight: '800', color: '#444', marginBottom: 8 },
-  hostInput: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 16, color: '#111', borderWidth: 1, borderColor: '#f0f0f0' },
-  resumeCard: { backgroundColor: '#e8f5e9', borderColor: '#c8e6c9' },
-  resumeTitle: { fontSize: 16, fontWeight: '800', color: '#2e7d32', marginBottom: 4 },
-  resumeText: { fontSize: 14, color: '#388e3c', marginBottom: 12 },
-  resumeBtnRow: { flexDirection: 'row' },
-  resumeBtn: { backgroundColor: '#4caf50', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 },
-  resumeBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
-  sectionTitle: { fontSize: 15, fontWeight: '800', marginBottom: 12, color: '#444' },
-  modeRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
-  option: {
-    flex: 1,
-    paddingVertical: 16,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    backgroundColor: '#f9f9f9',
-    borderWidth: 2,
-    borderColor: 'transparent',
-    alignItems: 'center',
+  headerLogo: {
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: -0.5,
   },
-  optionActive: { backgroundColor: '#e3f2fd', borderColor: '#1976d2' },
-  optionText: { fontSize: 16, fontWeight: '800', color: '#666' },
-  optionTextActive: { color: '#1976d2' },
-  optionSub: { fontSize: 11, color: '#888', marginTop: 4, textAlign: 'center' },
-  speedRow: { flexDirection: 'row', gap: 8 },
-  smallOption: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: '#f9f9f9',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#eee',
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
-  smallOptionText: { fontWeight: '700', color: '#666' },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  rowLabel: { fontSize: 16, fontWeight: '600', color: '#333' },
-  noteWrap: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
-  noteTitle: { fontWeight: '700', marginBottom: 4, color: '#111' },
-  noteText: { color: '#666', lineHeight: 20, fontSize: 13 },
-  adContainer: { alignItems: 'center', marginTop: 10 },
-  adBadge: { backgroundColor: '#e3f2fd', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  adBadgeText: { color: '#1976d2', fontWeight: '700', fontSize: 13 },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    padding: 20,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-  },
-  startBtn: {
-    backgroundColor: '#1976d2',
-    paddingVertical: 16,
+  goProPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
     borderRadius: 14,
-    alignItems: 'center',
-  },
-  startBtnText: { color: '#fff', fontSize: 18, fontWeight: '900' },
-  themePill: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
     borderWidth: 1,
   },
-  themePillText: {
-    fontSize: 13,
-  },
-  // Modal Styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: '90%',
-    maxHeight: '85%',
-    borderRadius: 20,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-  },
-  modalCloseBtn: {
-    padding: 4,
-  },
-  modalCloseBtnText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  modalSectionTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    marginTop: 14,
-    marginBottom: 8,
-    textTransform: 'uppercase',
+  goProPillText: {
+    fontSize: 12,
+    fontWeight: "900",
     letterSpacing: 0.5,
   },
-  typeToggleRow: {
-    flexDirection: 'row',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 10,
+  infoBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  typeToggleBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
+
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
   },
-  typeToggleText: {
-    fontWeight: '700',
+
+  titleSection: {
+    marginBottom: 16,
+  },
+  titleGreeting: {
     fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 4,
   },
-  weekdayContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginVertical: 4,
+  titleMain: {
+    fontSize: 34,
+    fontWeight: "900",
+    letterSpacing: -0.8,
   },
-  weekdayCircle: {
+
+  // Resume Card
+  resumeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  resumeLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  resumeProgressCircle: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
+    borderWidth: 3,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  weekdayText: {
-    fontSize: 14,
-    fontWeight: '700',
+  resumeInnerDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
-  dateCard: {
-    width: 60,
-    height: 80,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  dateCardWeekday: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  dateCardDay: {
-    fontSize: 18,
-    marginVertical: 2,
-  },
-  dateCardMonth: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  timeGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 10,
-  },
-  timeGridButton: {
-    width: '22%',
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  periodRow: {
-    flexDirection: 'row',
-    marginTop: 4,
-  },
-  periodButton: {
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalFooter: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-    marginTop: 20,
-    paddingTop: 16,
-    borderTopWidth: 1,
-  },
-  modalFooterBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-  },
-  modalFooterBtnText: {
-    fontWeight: '700',
+  resumeTitle: {
     fontSize: 15,
+    fontWeight: "800",
+  },
+  resumeSub: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  resumeCtaText: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+
+  // NEW GAME Card
+  newGameCard: {
+    borderRadius: 28,
+    padding: 22,
+    position: "relative",
+    overflow: "hidden",
+    marginBottom: 16,
+  },
+  watermark: {
+    position: "absolute",
+    right: 10,
+    top: -10,
+    fontSize: 130,
+    fontWeight: "900",
+    color: "rgba(0,0,0,0.06)",
+    letterSpacing: -6,
+  },
+  newGameTag: {
+    color: "rgba(255,255,255,0.8)",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+    marginBottom: 14,
+  },
+  modeTabsWrap: {
+    flexDirection: "row",
+    backgroundColor: "rgba(0,0,0,0.18)",
+    borderRadius: 16,
+    padding: 4,
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+  },
+  modeTabActive: {
+    backgroundColor: "#ffffff",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  modeTabText: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  modeTabInactiveText: {
+    color: "rgba(255,255,255,0.85)",
+  },
+  modeDescription: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "600",
+    textAlign: "center",
+    marginVertical: 14,
+  },
+  speedPillsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  speedPill: {
+    flex: 1,
+    paddingVertical: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.25)",
+  },
+  speedPillActive: {
+    backgroundColor: "rgba(255,255,255,0.28)",
+    borderColor: "#ffffff",
+  },
+  speedPillText: {
+    color: "#ffffff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  startGameBtn: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    marginTop: 18,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  startGameBtnText: {
+    fontSize: 16,
+    fontWeight: "900",
+  },
+
+  // Party Grid
+  partyGridRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 20,
+  },
+  partyCard: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  partyIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  partyCardTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+  partyCardSub: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+
+  // Preferences Card & Settings
+  settingsCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  settingRowItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  settingRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  settingIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settingItemLabel: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  settingRowRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  settingItemValue: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  themeActiveTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 10,
+  },
+  themeActiveTagName: {
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  settingDivider: {
+    height: 1,
+    marginVertical: 10,
+  },
+  themePillsContainer: {
+    flexDirection: "row",
+    gap: 8,
+    paddingTop: 8,
+    paddingBottom: 2,
+  },
+  themePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+  },
+  themePillDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  themePillName: {
+    fontSize: 13,
+  },
+
+  // 30m Ad-Free Section
+  adFreeSection: {
+    marginBottom: 20,
+  },
+  adFreeActiveCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  adFreeActiveTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  adFreeActiveSub: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+
+  // Voice Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  modalBox: {
+    width: "100%",
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 16,
+  },
+  modalItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 4,
+  },
+  modalItemText: {
+    fontSize: 15,
+    fontWeight: "700",
   },
 });

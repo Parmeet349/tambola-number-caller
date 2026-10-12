@@ -7,6 +7,8 @@ Notifications.setNotificationHandler({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
@@ -77,7 +79,7 @@ export async function scheduleGameNightReminder(config: ReminderConfig) {
 
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: "🎲 Tambola Game Night!",
+      title: "Tambola Game Night!",
       body: "Gather the family! It's time for your Tambola game. Grab your tickets and let's play!",
       sound: true,
     },

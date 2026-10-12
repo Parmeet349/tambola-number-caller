@@ -69,7 +69,7 @@ function loadAd() {
   }
 }
 
-export function useRewardedAd(unitId = PROD_IDS.REWARDED) {
+export function useRewardedAd(unitId: string = PROD_IDS.REWARDED || '') {
   const { setAdFreeForHours } = useAdState();
 
   // 1. Setup global instance if needed

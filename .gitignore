@@ -60,5 +60,10 @@ node_modules/
 
 # Firebase files
 google-services.json
+tambola-number-caller-92eacdca0abc.json
 GoogleService-Info.plist
 commands.txt
+eas.json
+
+# Docs
+RELEASE_SUBMISSION_GUIDE_v*.md

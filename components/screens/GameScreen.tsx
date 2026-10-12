@@ -1,53 +1,51 @@
 // components/screens/GameScreen.tsx
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
     Alert,
+    Animated,
+    Dimensions,
     FlatList,
     Modal,
     Platform,
+    ScrollView,
+    Share,
+    StatusBar,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
-    Share,
-    ScrollView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ConfettiCannon from 'react-native-confetti-cannon';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../../app/(tabs)/index';
-import NumberGridImported from '../../components/NumberGrid';
 import { logEvent, logScreenView } from '../../utils/analytics';
-import { useRewardedAd } from '../../utils/hooks/useRewardedAd';
-import { numberStyle } from '../../utils/numberStyle';
-import { useAdState } from '../../utils/store/adState';
 import { useInterstitial } from '../ads/Interstitial';
+import { useRewardedAd } from '../../utils/hooks/useRewardedAd';
+import { useAdState } from '../../utils/store/adState';
 import { useTheme } from '../../utils/store/themeState';
 import { shouldShowInterstitial, recordInterstitialShown } from '../../utils/adFrequency';
-
-
-
-function ensureComponent<T extends React.ComponentType<any> | undefined>(Comp: T, name: string): React.ComponentType<any> {
-    if (Comp && typeof Comp === 'function') return Comp as React.ComponentType<any>;
-    const Placeholder: React.FC = () => (
-        <View style={{ padding: 12 }}>
-            <Text style={{ color: 'red', fontWeight: '700' }}>{name} missing</Text>
-        </View>
-    );
-    return Placeholder;
-}
-
-const NumberGrid = ensureComponent(NumberGridImported as any, 'NumberGrid');
+import HostPartyModal, { IncomingClaim } from '../HostPartyModal';
+import { broadcastPartyMessage, connectToPartyRoom, generateRoomCode } from '../../utils/partySync';
+import NumberGrid from '../NumberGrid';
+import { numberStyle } from '../../utils/numberStyle';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 
 const STORAGE_KEY = '@tambola_state_v1';
 const SPEEDS_MS = { slow: 3000, medium: 1500, fast: 700 } as const;
-
-// Get device type ios/android to adjust layout if needed
 const isIOS = Platform.OS === 'ios';
-const isAndroid = Platform.OS === 'android';
+
+const VOICE_OPTIONS = [
+    { id: 'fun_english', label: 'Fun English' },
+    { id: 'classic', label: 'Classic UK' },
+    { id: 'desi_bingo', label: 'Desi Bingo' },
+    { id: 'hindi_standard', label: 'Hindi Standard' },
+] as const;
 
 function createShuffledNumbers(): number[] {
     const arr = Array.from({ length: 90 }, (_, i) => i + 1);
@@ -59,8 +57,30 @@ function createShuffledNumbers(): number[] {
 }
 
 export default function GameScreen({ route, navigation }: Props) {
+    const insets = useSafeAreaInsets();
+    const topInset = Math.max(
+        insets.top,
+        Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0
+    );
+    const bottomInset = Math.max(insets.bottom, 24);
     const { currentTheme } = useTheme();
-    const { initialMode, initialSpeed, initialMute, hostName } = route.params ?? {};
+    const {
+        initialMode,
+        initialSpeed,
+        initialMute,
+        hostName,
+        partyRoomCode: initialPartyCode,
+        isPartyHost: initialPartyHost,
+        callerVoice: initialVoice,
+        isNewGame,
+    } = route.params ?? {};
+    const [partyRoomCode, setPartyRoomCode] = useState<string>(() => initialPartyCode || generateRoomCode());
+    const [isPartyHost, setIsPartyHost] = useState<boolean>(() => !!initialPartyHost);
+    const [isBroadcasting, setIsBroadcasting] = useState<boolean>(() => !!initialPartyHost);
+    const [partyModalVisible, setPartyModalVisible] = useState<boolean>(false);
+    const [partyClaims, setPartyClaims] = useState<IncomingClaim[]>([]);
+    const [latestClaimToast, setLatestClaimToast] = useState<string | null>(null);
+
     const [deck, setDeck] = useState<number[]>(() => createShuffledNumbers());
     const ptrRef = useRef<number>(0);
     const [calledSet, setCalledSet] = useState<Set<number>>(new Set());
@@ -71,127 +91,267 @@ export default function GameScreen({ route, navigation }: Props) {
     const [mute, setMute] = useState<boolean>(!!initialMute);
     const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
     const [isGameOver, setIsGameOver] = useState<boolean>(false);
-    const [callerVoice, setCallerVoice] = useState<'classic' | 'fun_english' | 'hindi_standard' | 'desi_bingo'>('fun_english');
+    const [callerVoice, setCallerVoice] = useState<'classic' | 'fun_english' | 'hindi_standard' | 'desi_bingo'>(() => initialVoice || 'fun_english');
     const intervalRef = useRef<number | null>(null);
     const { loaded, show } = useInterstitial();
     const { showAds } = useAdState();
     const { loaded: rewardedLoaded, show: showRewarded } = useRewardedAd();
 
+    const handleVoiceChange = async (v: 'classic' | 'fun_english' | 'hindi_standard' | 'desi_bingo') => {
+        setCallerVoice(v);
+        try {
+            await AsyncStorage.setItem('@tambola_caller_voice', v);
+        } catch (e) {}
+    };
+
     const [optionsVisible, setOptionsVisible] = useState(false);
 
-    // hide navigation header entirely (clean look)
-    useLayoutEffect(() => {
-        navigation.setOptions({ headerShown: false });
-    }, [navigation]);
+    const toastAnim = useRef(new Animated.Value(0)).current;
 
+    const T = currentTheme;
+    const isDark = T.isDark;
 
+    useEffect(() => {
+        if (!isPartyHost || !partyRoomCode) return;
+        const conn = connectToPartyRoom(partyRoomCode, (msg) => {
+            if (msg.type === 'CLAIM_WIN') {
+                const newClaim: IncomingClaim = {
+                    id: Math.random().toString(),
+                    playerName: msg.playerName,
+                    claimType: msg.claimType,
+                    timestamp: msg.timestamp,
+                    status: 'pending',
+                };
+                setPartyClaims((prev) => [newClaim, ...prev]);
+                setLatestClaimToast(`${msg.playerName} claimed ${msg.claimType}!`);
+                try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch (e) {}
+            }
+        });
+        return () => conn.disconnect();
+    }, [isPartyHost, partyRoomCode]);
 
-    // ...
+    useEffect(() => {
+        if (latestClaimToast) {
+            Animated.sequence([
+                Animated.timing(toastAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+                Animated.delay(3000),
+                Animated.timing(toastAnim, { toValue: 0, duration: 300, useNativeDriver: true }),
+            ]).start(() => setLatestClaimToast(null));
+        }
+    }, [latestClaimToast]);
 
-    // load state
+    useLayoutEffect(() => { navigation.setOptions({ headerShown: false }); }, [navigation]);
+
     useEffect(() => {
         logScreenView('GameScreen');
-        // ... rest of load state logic
-
         (async () => {
-            const s = await AsyncStorage.getItem(STORAGE_KEY);
-            if (s) {
-                const data = JSON.parse(s);
-                if (data) {
-                    if (Array.isArray(data.deck)) setDeck(data.deck);
-                    ptrRef.current = data.ptr ?? 0;
-                    setCalledSet(new Set(data.called ?? []));
-                    setHistory(data.history ?? []);
-                    if (data.mode) setMode(data.mode);
-                    if (data.speed) setSpeed(data.speed);
-                    if (typeof data.mute === 'boolean') setMute(data.mute);
-                    if (typeof data.isPlaying === 'boolean') setIsPlaying(data.isPlaying);
-                    if (typeof data.elapsedSeconds === 'number') setElapsedSeconds(data.elapsedSeconds);
-                    if (data.callerVoice) setCallerVoice(data.callerVoice);
+            if (!isNewGame) {
+                const s = await AsyncStorage.getItem(STORAGE_KEY);
+                if (s) {
+                    const data = JSON.parse(s);
+                    if (data) {
+                        if (Array.isArray(data.deck)) setDeck(data.deck);
+                        ptrRef.current = data.ptr ?? 0;
+                        setCalledSet(new Set(data.called ?? []));
+                        setHistory(data.history ?? []);
+                        if (data.mode) setMode(data.mode);
+                        if (data.speed) setSpeed(data.speed);
+                        if (typeof data.mute === 'boolean') setMute(data.mute);
+                        if (typeof data.isPlaying === 'boolean') setIsPlaying(data.isPlaying);
+                        if (typeof data.elapsedSeconds === 'number') setElapsedSeconds(data.elapsedSeconds);
+                        if (data.callerVoice) setCallerVoice(data.callerVoice);
+                    }
+                }
+            }
+            if (initialVoice) {
+                setCallerVoice(initialVoice);
+            } else {
+                const savedVoice = await AsyncStorage.getItem('@tambola_caller_voice');
+                if (savedVoice) {
+                    setCallerVoice(savedVoice as any);
                 }
             }
         })();
+        return () => {
+            Speech.stop();
+        };
     }, []);
 
-    // persist
     useEffect(() => {
-        AsyncStorage.setItem(
-            STORAGE_KEY,
-            JSON.stringify({
-                deck,
-                ptr: ptrRef.current,
-                called: Array.from(calledSet),
-                history,
-                mode,
-                speed,
-                mute,
-                isPlaying,
-                elapsedSeconds,
-                callerVoice,
-            })
-        ).catch(() => { });
-    }, [deck, calledSet, history, mode, speed, mute, isPlaying, elapsedSeconds, callerVoice]);
+        if (!isGameOver) {
+            AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({
+                deck, ptr: ptrRef.current, called: Array.from(calledSet),
+                history, mode, speed, mute, isPlaying, elapsedSeconds, callerVoice,
+            })).catch(() => {});
+        }
+    }, [deck, calledSet, history, mode, speed, mute, isPlaying, elapsedSeconds, callerVoice, isGameOver]);
 
     const isTimerActive = mode === 'manual'
         ? (calledSet.size > 0 && calledSet.size < 90 && !isGameOver)
-        : (isPlaying && calledSet.size < 90 && !isGameOver);
+        : (isPlaying && !isGameOver);
 
     useEffect(() => {
-        let timerInterval: number | null = null;
+        let t: any = null;
         if (isTimerActive) {
-            timerInterval = window.setInterval(() => {
-                setElapsedSeconds(prev => prev + 1);
-            }, 1000) as unknown as number;
+            t = setInterval(() => setElapsedSeconds(prev => prev + 1), 1000);
         }
-        return () => {
-            if (timerInterval) clearInterval(timerInterval as unknown as number);
-        };
+        return () => { if (t) clearInterval(t); };
     }, [isTimerActive]);
 
-    useEffect(() => {
-        if (mode === 'auto' && isPlaying) startAuto();
-        else stopAuto();
-        return stopAuto;
-    }, [mode, isPlaying, speed]);
-
-    useEffect(() => () => stopAuto(), []);
-
-    function startAuto() {
-        stopAuto();
-        intervalRef.current = window.setInterval(drawNext, SPEEDS_MS[speed]) as unknown as number;
-    }
-
-    function stopAuto() {
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current as unknown as number);
-            intervalRef.current = null;
-        }
-    }
-
-    function speakNumber(n: number) {
+    const speakNumber = async (num: number) => {
         if (mute) return;
         try {
-            Speech.stop();
-            const styles = numberStyle();
-            
+            const nickname = getFunName(num);
             const isHindi = callerVoice === 'hindi_standard' || callerVoice === 'desi_bingo';
-            const isFun = callerVoice === 'fun_english' || callerVoice === 'desi_bingo';
-            
-            let styledNumber = isHindi
-                ? styles[1][n as keyof typeof styles[1]]
-                : styles[0][n as keyof typeof styles[0]];
-                
-            styledNumber = `${styledNumber}, Number ${n}`;
-            
-            let toSpeak = n.toString().split('').join(' ');
-            toSpeak = n < 10 ? `Single ${toSpeak}` : `${toSpeak}, ${n}`;
-            
-            Speech.speak(
-                isFun ? styledNumber : toSpeak,
-                { rate: 0.75, language: isHindi ? 'hi-IN' : 'en-IN' }
+            const lang = isHindi ? 'hi-IN' : callerVoice === 'classic' ? 'en-GB' : callerVoice === 'fun_english' ? 'en-IN' : 'en-US';
+            const textToSpeak = nickname && nickname.trim() !== ''
+                ? `${num}. ${nickname}`
+                : `${num}`;
+            Speech.stop();
+            Speech.speak(textToSpeak, {
+                language: lang,
+                pitch: 1.0,
+                rate: 0.9,
+            });
+        } catch (e) {}
+    };
+
+    const callNext = () => {
+        if (ptrRef.current >= deck.length) {
+            setIsGameOver(true);
+            setIsPlaying(false);
+            recordGameHistory();
+            return;
+        }
+
+        const num = deck[ptrRef.current];
+        ptrRef.current += 1;
+
+        setCalledSet(prev => {
+            const next = new Set(prev);
+            next.add(num);
+            return next;
+        });
+        setHistory(prev => [num, ...prev]);
+
+        speakNumber(num);
+        try { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } catch (e) {}
+
+        if (isPartyHost && isBroadcasting) {
+            broadcastPartyMessage(partyRoomCode, {
+                type: 'NUMBER_CALLED',
+                currentNumber: num,
+                calledList: [num, ...history],
+                totalCalled: ptrRef.current,
+                hostName: hostName || 'Host',
+                timestamp: Date.now(),
+            });
+        }
+
+        if (ptrRef.current >= 90) {
+            setIsGameOver(true);
+            setIsPlaying(false);
+            recordGameHistory();
+            AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+        }
+    };
+
+    const recordGameHistory = async () => {
+        try {
+            const entry = {
+                id: Math.random().toString(),
+                date: Date.now(),
+                durationSeconds: elapsedSeconds,
+                numbersCalled: ptrRef.current,
+                mode,
+                speed,
+            };
+            const existingStr = await AsyncStorage.getItem('@tambola_history');
+            const historyList = existingStr ? JSON.parse(existingStr) : [];
+            historyList.unshift(entry);
+            await AsyncStorage.setItem('@tambola_history', JSON.stringify(historyList));
+        } catch (e) {}
+    };
+
+    useEffect(() => {
+        if (mode === 'auto' && isPlaying && !isGameOver) {
+            intervalRef.current = setInterval(() => {
+                callNext();
+            }, SPEEDS_MS[speed]) as unknown as number;
+        } else {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+        return () => {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        };
+    }, [mode, isPlaying, speed, isGameOver]);
+
+    const restartGame = async () => {
+        const doReset = async () => {
+            Speech.stop();
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            intervalRef.current = null;
+            setIsPlaying(false);
+            setIsGameOver(false);
+            setElapsedSeconds(0);
+            const newDeck = createShuffledNumbers();
+            setDeck(newDeck);
+            ptrRef.current = 0;
+            setCalledSet(new Set());
+            setHistory([]);
+            try { await AsyncStorage.removeItem(STORAGE_KEY); } catch (e) {}
+            await tryShowInterstitial(true);
+        };
+
+        if (!showAds) {
+            Alert.alert(
+                'Reset Game?',
+                'All called numbers and progress will be reset.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Reset', style: 'destructive', onPress: doReset },
+                ]
             );
-        } catch { }
-    }
+            return;
+        }
+
+        Alert.alert(
+            'Reset Game?',
+            'All called numbers and progress will be reset.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Go Ad-Free (30m)',
+                    onPress: async () => {
+                        if (rewardedLoaded) {
+                            const shown = await showRewarded();
+                            if (!shown) Alert.alert('Notice', 'Please try again in a moment.');
+                        } else {
+                            Alert.alert('Loading...', 'Ad is loading. Try again shortly.');
+                        }
+                    },
+                },
+                {
+                    text: 'Reset Game',
+                    style: 'destructive',
+                    onPress: doReset,
+                },
+            ]
+        );
+    };
+
+    const tryShowInterstitial = async (forceOnRestart: boolean = false) => {
+        if (!showAds) return;
+        const count = calledSet.size;
+        if ((count >= 3 || forceOnRestart) && shouldShowInterstitial()) {
+            if (loaded) {
+                recordInterstitialShown();
+                await show();
+            }
+        }
+    };
 
     const formatTime = (secs: number) => {
         const m = Math.floor(secs / 60).toString().padStart(2, '0');
@@ -199,597 +359,582 @@ export default function GameScreen({ route, navigation }: Props) {
         return `${m}:${s}`;
     };
 
-    const saveGameToHistory = async () => {
-        try {
-            const historyStr = await AsyncStorage.getItem('@tambola_history');
-            const historyList = historyStr ? JSON.parse(historyStr) : [];
-            const newEntry = {
-                id: Date.now().toString(),
-                date: Date.now(),
-                durationSeconds: elapsedSeconds,
-                numbersCalled: 90,
-                mode,
-                speed,
-            };
-            await AsyncStorage.setItem('@tambola_history', JSON.stringify([newEntry, ...historyList].slice(0, 50)));
-        } catch (e) { }
+    const handleCallPlayPress = () => {
+        if (mode === 'manual') callNext();
+        else setIsPlaying(prev => !prev);
     };
-
-    // Frequency-capped interstitial helper
-    function tryShowInterstitial() {
-        if (!showAds) return;
-        if (!shouldShowInterstitial()) return;
-        show().then(shown => {
-            if (shown) {
-                recordInterstitialShown();
-                console.log('[Ad] Interstitial shown (capped)');
-            }
-        });
-    }
-
-    function drawNext() {
-        const ptr = ptrRef.current;
-        if (ptr >= deck.length) {
-            stopAuto();
-            setIsPlaying(false);
-            logEvent('game_complete', { mode, speed, timeTaken: elapsedSeconds });
-            setIsGameOver(true);
-            saveGameToHistory();
-            // Show interstitial on game complete — natural pause, high eCPM
-            tryShowInterstitial();
-            return;
-        }
-        const num = deck[ptr];
-        ptrRef.current = ptr + 1;
-        setCalledSet(prev => new Set(prev).add(num));
-        setHistory(prev => [num, ...prev]);
-        speakNumber(num);
-    }
-
-    function restartGame() {
-        logEvent('game_restart', { mode, speed });
-        stopAuto();
-        setDeck(createShuffledNumbers());
-        ptrRef.current = 0;
-        setCalledSet(new Set());
-        setHistory([]);
-        setIsPlaying(false);
-        setElapsedSeconds(0);
-        setIsGameOver(false);
-        // Show interstitial on restart — frequency capped
-        tryShowInterstitial();
-        try { Speech.stop(); } catch { }
-    }
-
-    function handleRestart() {
-        if (!showAds) {
-            // Standard confirmation for ad-free users
-            Alert.alert(
-                'Restart Game',
-                'Are you sure you want to restart?',
-                [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Restart', style: 'destructive', onPress: restartGame }
-                ]
-            );
-            return;
-        }
-
-        // Prompt for Ad-Free or Interstitial
-        Alert.alert(
-            'Restart Game',
-            'Watch a short video for 30 mins Ad-Free game?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Go Ad-Free',
-                    onPress: async () => {
-                        if (rewardedLoaded) {
-                            const shown = await showRewarded();
-                            if (!shown) Alert.alert('Error', 'Ad not ready yet.');
-                        } else {
-                            Alert.alert('Ad not ready', 'Rewarded ad is loading, please wait.');
-                        }
-                    }
-                },
-                {
-                    text: 'Restart Game',
-                    onPress: restartGame
-                }
-            ]
-        );
-    }
-
-    const isManual = mode === 'manual';
-    const callPlayLabel = isManual
-        ? 'Call Number'
-        : isPlaying
-            ? 'Pause Auto'
-            : 'Play Auto';
-
-    function handleCallPlayPress() {
-        if (isManual) {
-            drawNext();
-        } else {
-            setIsPlaying(prev => !prev);
-        }
-    }
 
     const handleShare = async () => {
         try {
             await Share.share({
-                message: `I just hosted a Tambola game using the Tambola Number Caller app! All 90 numbers called in ${formatTime(elapsedSeconds)}! 🎉 Download the app to play your next game.`,
+                message: `I just hosted a Tambola game! All 90 numbers called in ${formatTime(elapsedSeconds)}. Download Tambola Number Caller to play at your next game night!`,
             });
         } catch (e) {}
     };
 
-    const getFunName = (num: number) => {
-        const styles = numberStyle();
-        const isHindi = callerVoice === 'hindi_standard' || callerVoice === 'desi_bingo';
-        return isHindi ? styles[1][num as keyof typeof styles[1]] : styles[0][num as keyof typeof styles[0]];
+    const getFunName = (num: number): string => {
+        try {
+            const lists = numberStyle() as any[];
+            const isHindi = callerVoice === 'hindi_standard' || callerVoice === 'desi_bingo';
+            const list = isHindi ? lists[1] : lists[0];
+            return String((list && list[num]) || '');
+        } catch (e) {
+            return '';
+        }
     };
+
     const latestNumber = history.length > 0 ? history[0] : null;
+    const progressPercent = Math.min(100, Math.round((calledSet.size / 90) * 100));
 
     return (
-        <View style={[styles.container, { backgroundColor: currentTheme.background }]}>
-            {/* Custom top bar */}
-            <View style={[styles.topBar, { backgroundColor: currentTheme.isDark ? '#0f0c1b' : '#f5f5f5', borderBottomColor: currentTheme.isDark ? '#2a1f49' : '#ddd', marginTop: isIOS ? 50 : 20 }]}>
-                <TouchableOpacity
-                    onPress={() => {
-                        // Show interstitial on exit — high-intent moment
-                        tryShowInterstitial();
-                        navigation.goBack();
-                    }}
-                    style={[styles.topBtn, { backgroundColor: currentTheme.isDark ? '#3e150a' : '#ef5350' }]}
-                >
-                    <Text style={styles.topBtnText}>← Back</Text>
-                </TouchableOpacity>
+        <View style={[styles.safe, { backgroundColor: T.background }]}>
+            <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-                <TouchableOpacity
-                    onPress={() => navigation.navigate('HistoryModal', { historySnapshot: history })}
-                    style={[styles.topBtn, { backgroundColor: currentTheme.primary }]}
-                >
-                    <Text style={styles.topBtnText}>History</Text>
-                </TouchableOpacity>
+            {/* ── TOP HERO CARD ── */}
+            <View style={[styles.heroCard, { backgroundColor: T.primary, paddingTop: topInset + 6 }]}>
+                {/* Navigation Bar inside hero */}
+                <View style={styles.heroNavBar}>
+                    <TouchableOpacity
+                        onPress={() => { tryShowInterstitial(); navigation.goBack(); }}
+                        style={styles.heroNavBtn}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                        <Ionicons name="chevron-back" size={26} color="#fff" />
+                    </TouchableOpacity>
 
-                <TouchableOpacity
-                    onPress={handleRestart}
-                    style={[styles.topBtn, { backgroundColor: currentTheme.isDark ? '#3e2e0a' : '#ffa726' }]}
-                >
-                    <Text style={styles.topBtnText}>Restart</Text>
-                </TouchableOpacity>
-            </View>
-
-            {/* Scrollable middle area */}
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 20 }}>
-                {/* Title section */}
-                <View style={[styles.header, { borderBottomColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-                    <Text style={[styles.title, { color: currentTheme.text }]}>{hostName ? `${hostName}'s Game` : 'Tambola Number Caller'}</Text>
-                    <View style={styles.subtitleRow}>
-                        <Text style={[styles.subtitle, { color: currentTheme.textLight }]}>
-                            {mode.toUpperCase()} • {speed.toUpperCase()}
-                        </Text>
-                        <Text style={[styles.timerText, { color: currentTheme.isDark ? '#81c784' : '#2e7d32', backgroundColor: currentTheme.isDark ? '#1e3822' : '#e8f5e9' }]}>⏱ {formatTime(elapsedSeconds)}</Text>
-                    </View>
-                </View>
-
-                {/* Spotlight Number */}
-                {latestNumber !== null ? (
-                    <View style={styles.spotlightContainer}>
-                        <View style={[styles.spotlightBubble, { backgroundColor: currentTheme.primary, shadowColor: currentTheme.primary }]}>
-                            <Text style={styles.spotlightNumber}>{latestNumber}</Text>
-                            <Text style={[styles.spotlightName, { color: '#ffffff' }]}>{getFunName(latestNumber)}</Text>
+                    <View style={styles.heroNavCenter}>
+                        <Text style={styles.heroTitleText}>Tambola</Text>
+                        <View style={styles.heroTimerPill}>
+                            <Text style={styles.heroTimerText}>{formatTime(elapsedSeconds)}</Text>
                         </View>
                     </View>
-                ) : (
-                    <View style={styles.spotlightPlaceholder} />
-                )}
 
-                {/* Grid */}
-                <NumberGrid calledNumbersSet={calledSet} onTilePress={() => { }} />
-            </ScrollView>
+                    <View style={styles.heroNavRight}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                if (!isPartyHost) { setIsPartyHost(true); setIsBroadcasting(true); }
+                                setPartyModalVisible(true);
+                            }}
+                            style={styles.heroNavBtn}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                            <Ionicons name="people-outline" size={22} color="#fff" />
+                        </TouchableOpacity>
 
-            {/* Controls area: Options + Call/Play + Restart */}
-            <View style={[styles.controlsBar, { backgroundColor: currentTheme.cardBg, borderTopColor: currentTheme.isDark ? '#2a1f49' : '#eee' }]}>
-                <TouchableOpacity
-                    style={[styles.optionsBtn, { backgroundColor: currentTheme.isDark ? '#1b1433' : '#f9f9f9', borderColor: currentTheme.isDark ? '#2a1f49' : '#e0e0e0' }]}
-                    onPress={() => setOptionsVisible(true)}
-                >
-                    <Text style={[styles.optionsText, { color: currentTheme.text }]}>⚙ Game Options</Text>
-                </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => navigation.navigate('HistoryModal', { historySnapshot: history })}
+                            style={styles.heroNavBtn}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                            <Ionicons name="list-outline" size={22} color="#fff" />
+                        </TouchableOpacity>
+                    </View>
+                </View>
 
-                <View style={styles.actionsRow}>
-                    <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: currentTheme.primary }]}
-                        onPress={handleCallPlayPress}
-                    >
-                        <Text style={styles.actionText}>{callPlayLabel}</Text>
-                    </TouchableOpacity>
+                {/* Big Number in Center */}
+                <View style={styles.bigNumberWrap}>
+                    <Text style={styles.bigNumberText}>
+                        {latestNumber !== null ? latestNumber : '0'}
+                    </Text>
+                    <Text style={styles.nicknameText} numberOfLines={1}>
+                        {latestNumber !== null ? getFunName(latestNumber) : 'ready to call'}
+                    </Text>
+                </View>
 
-                    <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: currentTheme.isDark ? '#3e150a' : '#ef5350' }]}
-                        onPress={handleRestart}
-                    >
-                        <Text style={styles.actionText}>Restart</Text>
-                    </TouchableOpacity>
+                {/* Meta Badges Row */}
+                <View style={styles.metaRow}>
+                    <View style={styles.metaPill}>
+                        <Text style={styles.metaPillText}>{calledSet.size} / 90</Text>
+                    </View>
+                    <View style={styles.metaPill}>
+                        <Text style={styles.metaPillText}>
+                            {mode === 'manual' ? 'Manual' : `Auto • ${speed}`}
+                        </Text>
+                    </View>
+                    <View style={styles.metaPill}>
+                        <Text style={styles.metaPillText}>
+                            {isPartyHost && isBroadcasting ? `Room ${partyRoomCode}` : 'Solo'}
+                        </Text>
+                    </View>
+                </View>
+
+                {/* Horizontal Progress Track inside Hero Card */}
+                <View style={styles.heroProgressTrack}>
+                    <View style={[styles.heroProgressFill, { width: `${progressPercent}%` }]} />
                 </View>
             </View>
 
-            {/* Options Modal */}
-            <Modal
-                visible={optionsVisible}
-                animationType="slide"
-                transparent
-                onRequestClose={() => setOptionsVisible(false)}
+            {/* ── CLAIM TOAST ── */}
+            {latestClaimToast && (
+                <Animated.View style={[styles.claimToast, { opacity: toastAnim, transform: [{ translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [-20, 0] }) }] }]}>
+                    <TouchableOpacity onPress={() => { setLatestClaimToast(null); setPartyModalVisible(true); }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Ionicons name="trophy" size={16} color="#fff" />
+                            <Text style={styles.claimToastText}>{latestClaimToast}</Text>
+                        </View>
+                        <Text style={styles.claimToastSub}>Tap to verify winning claim</Text>
+                    </TouchableOpacity>
+                </Animated.View>
+            )}
+
+            {/* ── PREVIOUS NUMBERS STRIP ("PREV") ── */}
+            <View style={styles.prevStrip}>
+                <Text style={styles.prevLabel}>PREV</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.prevList}>
+                    {history.length > 1 ? (
+                        history.slice(1, 7).map((num, i) => (
+                            <View key={i} style={[styles.prevChip, isDark && { backgroundColor: T.secondary }]}>
+                                <Text style={[styles.prevChipText, isDark && { color: T.text }]}>{num}</Text>
+                            </View>
+                        ))
+                    ) : (
+                        <Text style={[styles.prevEmptyText, isDark && { color: '#6b7280' }]}>None yet</Text>
+                    )}
+                </ScrollView>
+            </View>
+
+            {/* ── 1-90 NUMBER BOARD ── */}
+            <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ paddingBottom: 16 }}
+                showsVerticalScrollIndicator={false}
             >
+                <NumberGrid
+                    calledNumbersSet={calledSet}
+                    latestNumber={latestNumber}
+                    onTilePress={() => {}}
+                />
+            </ScrollView>
+
+            {/* ── BOTTOM FLOATING ACTION BAR ── */}
+            <View style={[styles.controlsBar, { backgroundColor: T.background, borderTopColor: isDark ? (T.id === 'midnight' ? '#222f44' : '#2a1f49') : '#f0f1f4' }]}>
+                {/* Options button */}
+                <TouchableOpacity
+                    style={[styles.sideControlBtn, { backgroundColor: T.cardBg, borderColor: isDark ? (T.id === 'midnight' ? '#222f44' : '#2a1f49') : '#e5e7eb' }]}
+                    onPress={() => setOptionsVisible(true)}
+                    activeOpacity={0.8}
+                >
+                    <Ionicons name="options-outline" size={22} color={T.text} />
+                </TouchableOpacity>
+
+                {/* Primary Call CTA */}
+                <TouchableOpacity
+                    style={[styles.mainCallBtn, { backgroundColor: T.primary }]}
+                    onPress={handleCallPlayPress}
+                    activeOpacity={0.85}
+                >
+                    <Ionicons
+                        name={mode === 'manual' ? 'play' : isPlaying ? 'pause' : 'play'}
+                        size={18}
+                        color="#ffffff"
+                    />
+                    <Text style={styles.mainCallBtnText}>
+                        {mode === 'manual'
+                            ? 'Call number'
+                            : isPlaying
+                            ? 'Pause'
+                            : 'Call number'}
+                    </Text>
+                </TouchableOpacity>
+
+                {/* Restart button */}
+                <TouchableOpacity
+                    style={[styles.sideControlBtn, { backgroundColor: T.cardBg, borderColor: isDark ? '#2a1f49' : '#e5e7eb' }]}
+                    onPress={restartGame}
+                    activeOpacity={0.8}
+                >
+                    <Ionicons name="refresh-outline" size={22} color={T.text} />
+                </TouchableOpacity>
+            </View>
+
+            {/* ── OPTIONS MODAL ── */}
+            <Modal visible={optionsVisible} animationType="slide" transparent>
                 <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContent, { backgroundColor: currentTheme.cardBg }]}>
-                        <View style={[styles.modalHeader, { borderBottomColor: currentTheme.isDark ? '#2a1f49' : '#eee' }]}>
-                            <Text style={[styles.modalTitle, { color: currentTheme.text }]}>Game Options</Text>
+                    <View style={[styles.modalSheet, { backgroundColor: T.cardBg, borderColor: isDark ? (T.id === 'midnight' ? '#222f44' : '#2a1f49') : '#e5e7eb', paddingBottom: bottomInset + 12 }]}>
+                        <View style={styles.modalHandle} />
+                        <View style={styles.modalHeaderRow}>
+                            <Text style={[styles.modalTitle, { color: T.text }]}>Game Settings</Text>
                             <TouchableOpacity onPress={() => setOptionsVisible(false)}>
-                                <Text style={[styles.modalClose, { color: currentTheme.text }]}>✕</Text>
+                                <Ionicons name="close" size={24} color={T.text} />
                             </TouchableOpacity>
                         </View>
 
-                        <View style={styles.modalSection}>
-                            <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Mode</Text>
-                            <View style={styles.optionRow}>
-                                <OptionPill
-                                    label="Manual"
-                                    selected={mode === 'manual'}
-                                    onPress={() => setMode('manual')}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Auto"
-                                    selected={mode === 'auto'}
+                        <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
+                            <Text style={[styles.modalSectionLabel, { color: T.textLight }]}>Mode</Text>
+                            <View style={styles.pillRow}>
+                                <TouchableOpacity
+                                    style={[styles.optionPill, mode === 'manual' && { backgroundColor: T.secondary, borderColor: T.primary }]}
+                                    onPress={() => { setMode('manual'); setIsPlaying(false); }}
+                                >
+                                    <Text style={[styles.optionPillText, mode === 'manual' && { color: T.primary, fontWeight: '800' }]}>Manual</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.optionPill, mode === 'auto' && { backgroundColor: T.secondary, borderColor: T.primary }]}
                                     onPress={() => setMode('auto')}
-                                    currentTheme={currentTheme}
-                                />
+                                >
+                                    <Text style={[styles.optionPillText, mode === 'auto' && { color: T.primary, fontWeight: '800' }]}>Automatic</Text>
+                                </TouchableOpacity>
                             </View>
-                        </View>
 
-                        <View style={styles.modalSection}>
-                            <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Speed</Text>
-                            <View style={styles.optionRow}>
-                                <OptionPill
-                                    label="Slow"
-                                    selected={speed === 'slow'}
-                                    onPress={() => setSpeed('slow')}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Med"
-                                    selected={speed === 'medium'}
-                                    onPress={() => setSpeed('medium')}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Fast"
-                                    selected={speed === 'fast'}
-                                    onPress={() => setSpeed('fast')}
-                                    currentTheme={currentTheme}
-                                />
-                            </View>
-                        </View>
+                            {mode === 'auto' && (
+                                <>
+                                    <Text style={[styles.modalSectionLabel, { color: T.textLight }]}>Speed</Text>
+                                    <View style={styles.pillRow}>
+                                        {(['slow', 'medium', 'fast'] as const).map(s => (
+                                            <TouchableOpacity
+                                                key={s}
+                                                style={[styles.optionPill, speed === s && { backgroundColor: T.secondary, borderColor: T.primary }]}
+                                                onPress={() => setSpeed(s)}
+                                            >
+                                                <Text style={[styles.optionPillText, speed === s && { color: T.primary, fontWeight: '800' }]}>
+                                                    {s === 'slow' ? 'Relaxed' : s === 'medium' ? 'Normal' : 'Fast'}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                </>
+                            )}
 
-                        <View style={styles.modalSection}>
-                            <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Sound</Text>
-                            <View style={styles.optionRow}>
-                                <OptionPill
-                                    label="Mute"
-                                    selected={mute}
-                                    onPress={() => setMute(true)}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Unmute"
-                                    selected={!mute}
+                            <Text style={[styles.modalSectionLabel, { color: T.textLight }]}>Audio</Text>
+                            <View style={styles.pillRow}>
+                                <TouchableOpacity
+                                    style={[styles.optionPill, !mute && { backgroundColor: T.secondary, borderColor: T.primary }]}
                                     onPress={() => setMute(false)}
-                                    currentTheme={currentTheme}
-                                />
+                                >
+                                    <Text style={[styles.optionPillText, !mute && { color: T.primary, fontWeight: '800' }]}>Sound On</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.optionPill, mute && { backgroundColor: T.secondary, borderColor: T.primary }]}
+                                    onPress={() => setMute(true)}
+                                >
+                                    <Text style={[styles.optionPillText, mute && { color: T.primary, fontWeight: '800' }]}>Muted</Text>
+                                </TouchableOpacity>
                             </View>
-                        </View>
 
-                        <View style={styles.modalSection}>
-                            <Text style={[styles.modalSectionTitle, { color: currentTheme.textLight }]}>Caller Voice</Text>
-                            <View style={styles.optionRow}>
-                                <OptionPill
-                                    label="Classic (EN)"
-                                    selected={callerVoice === 'classic'}
-                                    onPress={() => setCallerVoice('classic')}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Fun (EN)"
-                                    selected={callerVoice === 'fun_english'}
-                                    onPress={() => setCallerVoice('fun_english')}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Standard (HI)"
-                                    selected={callerVoice === 'hindi_standard'}
-                                    onPress={() => setCallerVoice('hindi_standard')}
-                                    currentTheme={currentTheme}
-                                />
-                                <OptionPill
-                                    label="Desi Bingo"
-                                    selected={callerVoice === 'desi_bingo'}
-                                    onPress={() => setCallerVoice('desi_bingo')}
-                                    currentTheme={currentTheme}
-                                />
+                            {/* ── CALLER VOICE ── */}
+                            <Text style={[styles.modalSectionLabel, { color: T.textLight }]}>Caller Voice</Text>
+                            <View style={styles.pillRow}>
+                                {VOICE_OPTIONS.map(v => (
+                                    <TouchableOpacity
+                                        key={v.id}
+                                        style={[styles.optionPill, callerVoice === v.id && { backgroundColor: T.secondary, borderColor: T.primary }]}
+                                        onPress={() => handleVoiceChange(v.id)}
+                                    >
+                                        <Text style={[styles.optionPillText, callerVoice === v.id && { color: T.primary, fontWeight: '800' }]}>
+                                            {v.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
                             </View>
-                        </View>
 
-                        <TouchableOpacity
-                            style={[styles.modalDoneBtn, { backgroundColor: currentTheme.primary }]}
-                            onPress={() => setOptionsVisible(false)}
-                        >
-                            <Text style={styles.modalDoneText}>Done</Text>
-                        </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.modalDoneBtn, { backgroundColor: T.primary, marginTop: 22, marginBottom: 8 }]}
+                                onPress={() => setOptionsVisible(false)}
+                            >
+                                <Text style={styles.modalDoneText}>Done</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
                     </View>
                 </View>
             </Modal>
 
-            {/* Mini footer showing latest numbers */}
-            <View style={[styles.footer, { backgroundColor: currentTheme.cardBg, borderTopColor: currentTheme.isDark ? '#2a1f49' : '#f0f0f0' }]}>
-                <Text style={[styles.footerTitle, { color: currentTheme.textLight }]}>Latest Called</Text>
-                <FlatList
-                    data={history.slice(0, 6)}
-                    keyExtractor={item => String(item)}
-                    horizontal
-                    renderItem={({ item }) => (
-                        <View style={[styles.latestPill, { backgroundColor: currentTheme.secondary, borderColor: currentTheme.primary }]}>
-                            <Text style={[styles.latestText, { color: currentTheme.primaryDark }]}>{item}</Text>
-                        </View>
-                    )}
-                    showsHorizontalScrollIndicator={false}
-                />
-            </View>
-
-            {/* Post-Game Summary Modal */}
+            {/* ── GAME OVER MODAL ── */}
             <Modal visible={isGameOver} animationType="fade" transparent>
                 <View style={styles.gameOverOverlay}>
-                    <View style={styles.gameOverContent}>
-                        <Text style={styles.gameOverTitle}>Game Finished! 🎉</Text>
-                        <Text style={styles.gameOverText}>You called all 90 numbers.</Text>
-                        <View style={styles.statBox}>
-                            <Text style={styles.statLabel}>Time Taken</Text>
-                            <Text style={styles.statValue}>{formatTime(elapsedSeconds)}</Text>
+                    <View style={[styles.gameOverCard, { backgroundColor: T.cardBg }]}>
+                        <Ionicons name="trophy" size={54} color="#ffd700" style={{ marginBottom: 10 }} />
+                        <Text style={[styles.gameOverTitle, { color: T.text }]}>Game Complete!</Text>
+                        <Text style={[styles.gameOverSub, { color: T.textLight }]}>All 90 numbers have been called.</Text>
+
+                        <View style={[styles.statBox, { backgroundColor: isDark ? '#1b1433' : '#f9f9f9', borderColor: isDark ? '#2a1f49' : '#eee' }]}>
+                            <Text style={[styles.statLabel, { color: T.textLight }]}>Time Taken</Text>
+                            <Text style={[styles.statValue, { color: T.primary }]}>{formatTime(elapsedSeconds)}</Text>
                         </View>
-                        
-                        <TouchableOpacity style={[styles.shareBtn, { backgroundColor: currentTheme.primary }]} onPress={handleShare}>
-                            <Text style={styles.shareBtnText}>Share Result</Text>
+
+                        <TouchableOpacity style={[styles.gameOverBtn, { backgroundColor: T.primary }]} onPress={handleShare}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Ionicons name="share-social-outline" size={18} color="#fff" />
+                                <Text style={styles.gameOverBtnText}>Share Result</Text>
+                            </View>
                         </TouchableOpacity>
 
-                        {/* Rewarded Ad CTA — high-intent moment */}
                         {showAds && (
                             <TouchableOpacity
-                                style={[styles.rewardedCta, { backgroundColor: currentTheme.isDark ? '#1b1433' : '#fff3e0', borderColor: currentTheme.isDark ? '#ff9800' : '#ffb74d' }]}
+                                style={[styles.gameOverBtnOutline, { borderColor: isDark ? '#ff9800' : '#e65100', backgroundColor: isDark ? '#1b1433' : '#fff3e0' }]}
                                 onPress={async () => {
                                     if (rewardedLoaded) {
                                         const shown = await showRewarded();
-                                        if (!shown) Alert.alert('Ad not ready', 'Please try again in a moment.');
+                                        if (!shown) Alert.alert('Notice', 'Please try again shortly.');
                                     } else {
-                                        Alert.alert('Loading...', 'Rewarded ad is loading. Try again shortly.');
+                                        Alert.alert('Loading...', 'Ad is loading. Try again in a moment.');
                                     }
                                 }}
                             >
-                                <Text style={[styles.rewardedCtaText, { color: currentTheme.isDark ? '#ffb74d' : '#e65100' }]}>
-                                    🎬 Watch Ad → Go Ad-Free 30 min
-                                </Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                    <Ionicons name="play-circle-outline" size={18} color={isDark ? '#ffb74d' : '#e65100'} />
+                                    <Text style={[styles.gameOverBtnOutlineText, { color: isDark ? '#ffb74d' : '#e65100' }]}>Watch Video → 30m Ad-Free</Text>
+                                </View>
                             </TouchableOpacity>
                         )}
 
-                        <TouchableOpacity style={[styles.modalDoneBtn, { marginTop: 12, backgroundColor: currentTheme.isDark ? '#1b1433' : '#444' }]} onPress={() => {
-                            restartGame();
-                        }}>
-                            <Text style={styles.modalDoneText}>Start New Game</Text>
+                        <TouchableOpacity style={[styles.gameOverBtnGhost, { backgroundColor: isDark ? '#251b40' : '#f5f5f5' }]} onPress={restartGame}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <Ionicons name="refresh" size={18} color={T.text} />
+                                <Text style={[styles.gameOverBtnGhostText, { color: T.text }]}>Start New Game</Text>
+                            </View>
                         </TouchableOpacity>
                     </View>
-                    {isGameOver && <ConfettiCannon count={150} origin={{x: 0, y: 0}} fallSpeed={2500} fadeOut />}
+                    {isGameOver && <ConfettiCannon count={150} origin={{ x: 0, y: 0 }} fallSpeed={2500} fadeOut />}
                 </View>
             </Modal>
+
+            <HostPartyModal
+                visible={partyModalVisible}
+                onClose={() => setPartyModalVisible(false)}
+                roomCode={partyRoomCode}
+                isBroadcasting={isBroadcasting}
+                claims={partyClaims}
+                onToggleBroadcast={() => setIsBroadcasting(prev => !prev)}
+                onUpdateClaimStatus={(claimId, status) => {
+                    setPartyClaims(prev => prev.map(c => c.id === claimId ? { ...c, status } : c));
+                }}
+                calledCount={calledSet.size}
+            />
         </View>
     );
 }
 
-type OptionPillProps = {
-    label: string;
-    selected?: boolean;
-    onPress: () => void;
-    currentTheme: any;
-};
-
-const OptionPill: React.FC<OptionPillProps> = ({ label, selected, onPress, currentTheme }) => (
-    <TouchableOpacity
-        style={[
-            styles.optionPill,
-            { backgroundColor: currentTheme.isDark ? '#1a122e' : '#f5f5f5', borderColor: currentTheme.isDark ? '#2a1f49' : '#e0e0e0' },
-            selected && { backgroundColor: currentTheme.secondary, borderColor: currentTheme.primary }
-        ]}
-        onPress={onPress}
-    >
-        <Text style={[
-            styles.optionPillText,
-            { color: currentTheme.textLight },
-            selected && { color: currentTheme.primary, fontWeight: '800' }
-        ]}>
-            {label}
-        </Text>
-    </TouchableOpacity>
-);
-
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#fff' },
-    topBar: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        padding: 10,
-        backgroundColor: '#f5f5f5',
-        borderBottomWidth: 1,
-        borderBottomColor: '#ddd',
-        marginTop: isIOS ? 50 : 20,
-    },
-    topBtn: {
-        paddingVertical: 8,
-        paddingHorizontal: 14,
-        borderRadius: 8,
-    },
-    topBtnText: { color: '#fff', fontWeight: '700' },
-    header: { alignItems: 'center', paddingTop: 8 },
-    title: { fontSize: 20, fontWeight: '800' },
-    subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 },
-    subtitle: { fontSize: 12, color: '#666' },
-    timerText: { fontSize: 13, fontWeight: '700', color: '#d32f2f', backgroundColor: '#ffebee', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
-    spotlightContainer: { alignItems: 'center', marginVertical: 10 },
-    spotlightBubble: { backgroundColor: '#1976d2', paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20, alignItems: 'center', minWidth: 200, shadowColor: '#1976d2', shadowOpacity: 0.3, shadowRadius: 5, elevation: 3 },
-    spotlightNumber: { color: '#fff', fontSize: 28, fontWeight: '900' },
-    spotlightName: { color: '#e3f2fd', fontSize: 13, fontWeight: '700', marginTop: 2 },
-    spotlightPlaceholder: { height: 75 },
+    safe: { flex: 1 },
 
-    controlsBar: {
-        paddingHorizontal: 12,
-        paddingTop: 8,
-        paddingBottom: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#eee',
-        backgroundColor: '#fafafa',
+    // Top Hero Card
+    heroCard: {
+        borderBottomLeftRadius: 36,
+        borderBottomRightRadius: 36,
+        paddingHorizontal: 20,
+        paddingBottom: 22,
+        shadowColor: '#000',
+        shadowOpacity: 0.12,
+        shadowRadius: 10,
+        elevation: 6,
     },
-    optionsBtn: {
-        alignSelf: 'flex-start',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: '#ccc',
-        backgroundColor: '#fff',
-        marginBottom: 8,
-    },
-    optionsText: {
-        fontSize: 13,
-        fontWeight: '600',
-    },
-    actionsRow: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-    actionBtn: {
-        flex: 1,
-        paddingVertical: 10,
-        borderRadius: 8,
-        alignItems: 'center',
-    },
-    actionText: {
-        color: '#fff',
-        fontWeight: '700',
-        fontSize: 14,
-    },
-
-    footer: { padding: 12, borderTopWidth: 1, borderTopColor: '#eee' },
-    footerTitle: { fontWeight: '700', marginBottom: 8 },
-    latestPill: {
-        backgroundColor: '#e0e0e0',
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-        borderRadius: 20,
-        marginRight: 8,
-    },
-    latestText: { fontWeight: '700' },
-
-    // Modal styles
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        justifyContent: 'flex-end',
-    },
-    modalContent: {
-        backgroundColor: '#fff',
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        paddingBottom: isIOS ? 24 : 16,
-        borderTopLeftRadius: 16,
-        borderTopRightRadius: 16,
-    },
-    modalHeader: {
+    heroNavBar: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: 8,
+        marginBottom: 10,
     },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '700',
+    heroNavBtn: {
+        width: 38,
+        height: 38,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-    modalClose: {
-        fontSize: 18,
-    },
-    modalSection: {
-        marginTop: 10,
-    },
-    modalSectionTitle: {
-        fontSize: 13,
-        fontWeight: '700',
-        marginBottom: 6,
-        color: '#555',
-    },
-    optionRow: {
+    heroNavCenter: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
+        alignItems: 'center',
         gap: 8,
     },
-    optionPill: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: '#ccc',
-        backgroundColor: '#fff',
-    },
-    optionPillSelected: {
-        backgroundColor: '#1976d2',
-        borderColor: '#1976d2',
-    },
-    optionPillText: {
-        fontSize: 13,
-        fontWeight: '500',
-        color: '#333',
-    },
-    optionPillTextSelected: {
-        color: '#fff',
-    },
-    modalDoneBtn: {
-        marginTop: 16,
-        alignSelf: 'stretch',
-        backgroundColor: '#1976d2',
-        paddingVertical: 10,
-        borderRadius: 10,
-        alignItems: 'center',
-    },
-    modalDoneText: {
-        color: '#fff',
-        fontWeight: '700',
-        fontSize: 15,
-    },
-    gameOverOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center' },
-    gameOverContent: { backgroundColor: '#fff', padding: 24, borderRadius: 20, width: '80%', alignItems: 'center' },
-    gameOverTitle: { fontSize: 24, fontWeight: '900', marginBottom: 8, color: '#111' },
-    gameOverText: { fontSize: 15, color: '#555', marginBottom: 20 },
-    statBox: { backgroundColor: '#f9f9f9', padding: 16, borderRadius: 12, width: '100%', alignItems: 'center', marginBottom: 20, borderWidth: 1, borderColor: '#eee' },
-    statLabel: { fontSize: 13, color: '#777', fontWeight: '700', textTransform: 'uppercase' },
-    statValue: { fontSize: 32, fontWeight: '900', color: '#1976d2', marginTop: 4 },
-    shareBtn: { backgroundColor: '#4caf50', width: '100%', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-    shareBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
-    rewardedCta: {
-        marginTop: 12,
-        width: '100%',
-        paddingVertical: 14,
-        borderRadius: 12,
-        alignItems: 'center',
-        borderWidth: 2,
-    },
-    rewardedCtaText: {
+    heroTitleText: {
+        color: '#ffffff',
+        fontSize: 18,
         fontWeight: '800',
-        fontSize: 14,
+        letterSpacing: -0.4,
     },
+    heroTimerPill: {
+        backgroundColor: 'rgba(255,255,255,0.22)',
+        paddingHorizontal: 10,
+        paddingVertical: 3,
+        borderRadius: 12,
+    },
+    heroTimerText: {
+        color: '#ffffff',
+        fontSize: 12,
+        fontWeight: '800',
+    },
+    heroNavRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+
+    // Big Number
+    bigNumberWrap: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginVertical: 4,
+    },
+    bigNumberText: {
+        fontSize: 108,
+        fontWeight: '900',
+        color: '#ffffff',
+        lineHeight: 114,
+        letterSpacing: -2,
+    },
+    nicknameText: {
+        fontSize: 17,
+        fontWeight: '700',
+        color: '#ffffff',
+        textAlign: 'center',
+        marginTop: 2,
+        marginBottom: 14,
+    },
+
+    // Meta Badges
+    metaRow: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 8,
+        marginBottom: 16,
+    },
+    metaPill: {
+        backgroundColor: 'rgba(255,255,255,0.22)',
+        paddingHorizontal: 14,
+        paddingVertical: 6,
+        borderRadius: 14,
+    },
+    metaPillText: {
+        color: '#ffffff',
+        fontSize: 13,
+        fontWeight: '800',
+    },
+
+    // Hero Progress
+    heroProgressTrack: {
+        height: 3.5,
+        borderRadius: 2,
+        backgroundColor: 'rgba(255,255,255,0.25)',
+        width: '100%',
+        overflow: 'hidden',
+    },
+    heroProgressFill: {
+        height: '100%',
+        backgroundColor: '#ffffff',
+        borderRadius: 2,
+    },
+
+    // Previous Strip
+    prevStrip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        gap: 12,
+    },
+    prevLabel: {
+        fontSize: 12,
+        fontWeight: '900',
+        color: '#6b7280',
+        letterSpacing: 0.8,
+    },
+    prevList: {
+        flexDirection: 'row',
+        gap: 8,
+        alignItems: 'center',
+    },
+    prevChip: {
+        backgroundColor: '#f2f4f7',
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 10,
+    },
+    prevChipText: {
+        color: '#111827',
+        fontSize: 14,
+        fontWeight: '800',
+    },
+    prevEmptyText: {
+        color: '#9ca3af',
+        fontSize: 12,
+        fontStyle: 'italic',
+    },
+
+    // Claim toast
+    claimToast: {
+        position: 'absolute',
+        top: isIOS ? 105 : 72,
+        left: 16,
+        right: 16,
+        backgroundColor: '#7b1fa2',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 14,
+        zIndex: 999,
+    },
+    claimToastText: { color: '#fff', fontWeight: '900', fontSize: 15 },
+    claimToastSub: { color: '#e1bee7', fontSize: 11, marginTop: 2 },
+
+    // Floating Controls Bar
+    controlsBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        paddingBottom: isIOS ? 20 : 12,
+        borderTopWidth: 1,
+        borderTopColor: '#f0f1f4',
+    },
+    sideControlBtn: {
+        width: 50,
+        height: 50,
+        borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+    },
+    mainCallBtn: {
+        flex: 1,
+        height: 50,
+        borderRadius: 18,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginHorizontal: 12,
+        gap: 8,
+        shadowColor: '#000',
+        shadowOpacity: 0.1,
+        shadowRadius: 6,
+        elevation: 3,
+    },
+    mainCallBtnText: {
+        color: '#ffffff',
+        fontSize: 16,
+        fontWeight: '800',
+    },
+
+    // Options Modal
+    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    modalSheet: {
+        borderTopLeftRadius: 28,
+        borderTopRightRadius: 28,
+        borderWidth: 1,
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        maxHeight: '85%',
+    },
+    modalHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: '#ddd', alignSelf: 'center', marginBottom: 16 },
+    modalHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+    modalTitle: { fontSize: 20, fontWeight: '900' },
+    modalSectionLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 14, marginBottom: 8 },
+    pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    optionPill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#f9fafb' },
+    optionPillText: { fontSize: 13, fontWeight: '600', color: '#4b5563' },
+    modalDoneBtn: { alignSelf: 'stretch', paddingVertical: 14, borderRadius: 14, alignItems: 'center' },
+    modalDoneText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+
+    // Game over modal
+    gameOverOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+    gameOverCard: { borderRadius: 24, padding: 28, width: '100%', alignItems: 'center' },
+    gameOverTitle: { fontSize: 26, fontWeight: '900', marginBottom: 4 },
+    gameOverSub: { fontSize: 14, marginBottom: 20 },
+    statBox: { borderRadius: 16, padding: 16, width: '100%', alignItems: 'center', marginBottom: 20, borderWidth: 1 },
+    statLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
+    statValue: { fontSize: 40, fontWeight: '900', marginTop: 4 },
+    gameOverBtn: { width: '100%', paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginBottom: 10 },
+    gameOverBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+    gameOverBtnOutline: { width: '100%', paddingVertical: 13, borderRadius: 14, alignItems: 'center', borderWidth: 2, marginBottom: 10 },
+    gameOverBtnOutlineText: { fontWeight: '800', fontSize: 14 },
+    gameOverBtnGhost: { width: '100%', paddingVertical: 13, borderRadius: 14, alignItems: 'center' },
+    gameOverBtnGhostText: { fontWeight: '700', fontSize: 15 },
 });
