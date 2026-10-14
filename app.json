@@ -11,9 +11,8 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.geekypajis.tambolanumbers",
-      "buildNumber": "13",
+      "buildNumber": "14",
       "infoPlist": {
-        "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized ads and improve the app experience.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "icon": "./assets/images/logo.png",
@@ -24,7 +23,7 @@
       "googleServicesFile": "./GoogleService-Info.plist"
     },
     "android": {
-      "versionCode": 13,
+      "versionCode": 14,
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/logo.png"
@@ -66,7 +65,6 @@
           "iosAppId": "ca-app-pub-1373723692607134~5045643159"
         }
       ],
-      "expo-tracking-transparency",
       [
         "@react-native-firebase/app",
         {
